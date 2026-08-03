@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 
 use crate::context::ContextSnapshot;
 use crate::enrichment::{EnrichmentReport, tokens};
-use crate::field::Field;
+use crate::field::{
+    CONTEXTUAL_WEIGHT_RULE, EXTERNAL_TERM_WEIGHT_RULE, Field, UNIFORM_DIE_RULE, UNIFORM_RULE,
+};
 use crate::reading::ReadingError;
 
 /// The field after declared context qualification.
@@ -24,22 +26,28 @@ pub struct EnrichedField {
     pub weight_additions: Vec<u64>,
 }
 
-/// A0's explicit rule: each matching context tag adds one base-weight share.
-/// Systems can later supply their own versioned qualifier behind this seam.
+/// Apply exactly the qualification rule declared by the field. Rule names are
+/// executable contracts rather than labels carried only for display.
 pub fn qualify(context: &ContextSnapshot, field: &Field) -> Result<QualifiedField, ReadingError> {
-    if field.candidates.is_empty() {
-        return Err(ReadingError::EmptyField);
+    match field.rules.as_str() {
+        CONTEXTUAL_WEIGHT_RULE => qualify_contextual(context, field),
+        UNIFORM_RULE | UNIFORM_DIE_RULE => qualify_uniform(field),
+        EXTERNAL_TERM_WEIGHT_RULE => Err(ReadingError::QualificationEvidenceRequired(
+            field.rules.clone(),
+        )),
+        _ => Err(ReadingError::UnsupportedRule(field.rules.clone())),
     }
-    let mut ids = BTreeSet::new();
+}
+
+/// Each matching context tag adds one base-weight share.
+fn qualify_contextual(
+    context: &ContextSnapshot,
+    field: &Field,
+) -> Result<QualifiedField, ReadingError> {
+    validate_candidates(field, false)?;
     let mut weights = Vec::with_capacity(field.candidates.len());
     let mut total = 0u64;
     for candidate in &field.candidates {
-        if candidate.id.trim().is_empty() || !ids.insert(candidate.id.clone()) {
-            return Err(ReadingError::InvalidCandidate(candidate.id.clone()));
-        }
-        if candidate.base_weight == 0 {
-            return Err(ReadingError::EmptyWeight);
-        }
         let matches = candidate.tags.intersection(&context.tags).count() as u64;
         let weight = candidate
             .base_weight
@@ -53,6 +61,39 @@ pub fn qualify(context: &ContextSnapshot, field: &Field) -> Result<QualifiedFiel
     Ok(QualifiedField { weights, total })
 }
 
+/// Ignore context and give every candidate one share. Requiring stored base
+/// weights to be one prevents a field from displaying weights the rule does
+/// not actually use.
+fn qualify_uniform(field: &Field) -> Result<QualifiedField, ReadingError> {
+    validate_candidates(field, true)?;
+    Ok(QualifiedField {
+        weights: vec![1; field.candidates.len()],
+        total: field.candidates.len() as u64,
+    })
+}
+
+fn validate_candidates(field: &Field, require_unit_weight: bool) -> Result<(), ReadingError> {
+    if field.candidates.is_empty() {
+        return Err(ReadingError::EmptyField);
+    }
+    let mut ids = BTreeSet::new();
+    for candidate in &field.candidates {
+        if candidate.id.trim().is_empty() || !ids.insert(candidate.id.clone()) {
+            return Err(ReadingError::InvalidCandidate(candidate.id.clone()));
+        }
+        if candidate.base_weight == 0 {
+            return Err(ReadingError::EmptyWeight);
+        }
+        if require_unit_weight && candidate.base_weight != 1 {
+            return Err(ReadingError::NonUniformCandidate {
+                candidate: candidate.id.clone(),
+                weight: candidate.base_weight,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Each distinct correlated external term declared by a candidate adds one
 /// base-weight share. Repeated cards do not multiply the same term.
 pub fn qualify_enriched(
@@ -60,7 +101,10 @@ pub fn qualify_enriched(
     field: &Field,
     report: &EnrichmentReport,
 ) -> Result<EnrichedField, ReadingError> {
-    let mut qualified = qualify(context, field)?;
+    if field.rules != EXTERNAL_TERM_WEIGHT_RULE {
+        return Err(ReadingError::UnsupportedRule(field.rules.clone()));
+    }
+    let mut qualified = qualify_contextual(context, field)?;
     let evidence_terms = report
         .matches
         .iter()

@@ -377,7 +377,7 @@ impl<B: Backend> CleromancyHost<B> {
         &mut self,
         advertise_intents: bool,
     ) -> Result<ProjectionSnapshot, HostError> {
-        let layout = mere::canvas::project_canvas_strategy_with_score(
+        let mut layout = mere::canvas::project_canvas_strategy_with_score(
             "phyllotaxis.default",
             &self.graph,
             None,
@@ -387,6 +387,31 @@ impl<B: Backend> CleromancyHost<B> {
             None,
             true,
         );
+        let mut projection_keys = layout
+            .positions
+            .iter()
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        // Phyllotaxis supplies a stable point set but currently emits it
+        // through a hash map. Pair canonical graph identities with a
+        // canonical point order before assigning Graphshell instances.
+        projection_keys.sort_by_key(|key| {
+            self.graph
+                .get_node(*key)
+                .expect("layout key remains in graph")
+                .id
+        });
+        let mut projection_points = layout
+            .positions
+            .iter()
+            .map(|(_, point)| *point)
+            .collect::<Vec<_>>();
+        projection_points.sort_by(|left, right| {
+            left.x
+                .total_cmp(&right.x)
+                .then_with(|| left.y.total_cmp(&right.y))
+        });
+        layout.positions = projection_keys.into_iter().zip(projection_points).collect();
         let mut scene = Scene::new();
         let mut presentation = PresentationManifest::default();
         let mut resources = BTreeMap::new();
@@ -456,6 +481,7 @@ impl<B: Backend> CleromancyHost<B> {
             resources.insert(resource, bytes);
         }
 
+        let mut routed_relations = Vec::new();
         for relation in self.graph.relations() {
             let (Some(&from), Some(&to), Some(from_position), Some(to_position)) = (
                 instance_of.get(&relation.from),
@@ -465,7 +491,7 @@ impl<B: Backend> CleromancyHost<B> {
             ) else {
                 continue;
             };
-            scene.relations.push(RoutedRelation {
+            routed_relations.push(RoutedRelation {
                 from,
                 to,
                 space: Scene::WORLD,
@@ -477,6 +503,14 @@ impl<B: Backend> CleromancyHost<B> {
                 weight: Some(1.0),
             });
         }
+        routed_relations.sort_by(|left, right| {
+            left.from
+                .0
+                .cmp(&right.from.0)
+                .then_with(|| left.to.0.cmp(&right.to.0))
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
+        scene.relations = routed_relations;
 
         scene.bounds = if layout.positions.is_empty() {
             Rect::new(Vec2::new(0.0, 0.0), Size2::new(0.0, 0.0))

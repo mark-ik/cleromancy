@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::canonical_digest;
 
+pub const CONTEXTUAL_WEIGHT_RULE: &str = "contextual-weight/v1";
+pub const EXTERNAL_TERM_WEIGHT_RULE: &str = "contextual-weight+external-term-share/v1";
+pub const UNIFORM_RULE: &str = "uniform/v1";
+pub const UNIFORM_DIE_RULE: &str = "uniform-die/v1";
+
 /// One possible suggestion or interpretive focus.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -30,6 +30,10 @@ baseline. Concurrence with sealed external evidence adds a separately disclosed
 share. Calculated readings take the new maximum; cast readings draw across the
 same externally qualified field.
 
+As of A6, this behavior is selected only by the field rule
+`contextual-weight+external-term-share/v1`. Using that rule without its sealed
+evidence is an error rather than an implicit contextual reading.
+
 ## Receipt
 
 An enriched receipt is `cleromancy.receipt/v2`. It carries:

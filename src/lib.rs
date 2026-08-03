@@ -15,6 +15,7 @@ pub mod reading;
 pub mod servitors;
 #[cfg(all(feature = "personal-sync", not(target_arch = "wasm32")))]
 pub mod sync;
+pub mod tarot;
 
 pub use app::{AppError, CleromancyApp};
 pub use context::ContextSnapshot;
@@ -22,7 +23,10 @@ pub use enrichment::{
     EnrichmentMatch, EnrichmentReport, EnrichmentSource, EnrichmentValue, ExternalProjection,
     SealedEnrichment,
 };
-pub use field::{Candidate, Field};
+pub use field::{
+    CONTEXTUAL_WEIGHT_RULE, Candidate, EXTERNAL_TERM_WEIGHT_RULE, Field, UNIFORM_DIE_RULE,
+    UNIFORM_RULE,
+};
 pub use host::{CleromancyHost, HostError};
 pub use intents::{
     IntentLimits, READ_INTENT, READ_SCHEMA, READ_SCOPE, ROLL_INTENT, ROLL_SCHEMA, ROLL_SCOPE,
@@ -39,6 +43,7 @@ pub use sync::{
     CleromancySyncBatch, CleromancySyncError, CleromancySyncImport, CleromancySyncSelection,
     SYNC_BATCH_SCHEMA, export_sync_batch, import_sync_projection,
 };
+pub use tarot::{TarotPack, TarotQualification};
 
 /// Stable fixture used by the A0 executable and integration receipts.
 pub fn a0_fixture() -> (ContextSnapshot, Field) {
@@ -48,7 +53,7 @@ pub fn a0_fixture() -> (ContextSnapshot, Field) {
         .with_tags(["change", "structure", "reflection"]);
     let field = Field::new(
         "cleromancy.fixture-system/v1",
-        "contextual-weight/v1",
+        CONTEXTUAL_WEIGHT_RULE,
         [
             Candidate::new(
                 "threshold",
@@ -94,7 +99,7 @@ pub fn a1_fixture() -> (ContextSnapshot, Field) {
 /// into the A2 external-term qualifier.
 pub fn a2_fixture() -> (ContextSnapshot, Field) {
     let (context, mut field) = a1_fixture();
-    field.rules = "contextual-weight+external-term-share/v1".to_string();
+    field.rules = EXTERNAL_TERM_WEIGHT_RULE.to_string();
     field.candidates[1]
         .tags
         .extend(["field", "harmony", "notes", "radio"].map(str::to_string));

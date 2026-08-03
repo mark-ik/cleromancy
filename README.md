@@ -150,6 +150,29 @@ cargo run --bin a5_field_receipt -- `
 See `design_docs/2026-08-03_a5_field_provenance.md` for the compatibility and
 privacy boundary.
 
+## A6
+
+A6 supplies the first real consumer of A5 field nodes: a bounded, text-only
+Major Arcana pack in Rider-Waite-Smith order, with Strength VIII and Justice
+XI. Traditional card titles are paired with original upright reflective
+prompts. The pack declares neither reversals nor astrology correspondences.
+
+The user chooses the qualification openly. `Uniform` gives all 22 cards one
+share and requires a secure cast. `Contextual` adds one base-weight share for
+each matching context tag, then permits either a deterministic maximum or a
+secure weighted cast. The selected rule, qualified weights, selection method,
+and exact pack-derived field remain visible in the receipt and graph.
+
+```powershell
+cargo test --test a6
+cargo run --bin a6_tarot_receipt -- `
+  receipts/a6-tarot.html `
+  receipts/a6-tarot.json
+```
+
+See `design_docs/2026-08-03_a6_major_arcana_pack.md` for the content and rule
+boundary.
+
 ## License
 
 MIT OR Apache-2.0.

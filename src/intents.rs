@@ -4,7 +4,7 @@
 use graphshell_protocol::{AdvertisedAction, IntentEffect, IntentReference};
 use serde::{Deserialize, Serialize};
 
-use crate::{Candidate, Field, SealedEnrichment};
+use crate::{Candidate, Field, SealedEnrichment, UNIFORM_DIE_RULE};
 
 pub const READ_INTENT: &str = "cleromancy.read";
 pub const SELECT_INTENT: &str = "cleromancy.select";
@@ -137,7 +137,7 @@ pub(crate) fn die_field(sides: u32, label: Option<&str>) -> Field {
         .unwrap_or_else(|| format!("d{sides}"));
     Field::new(
         format!("cleromancy.die/d{sides}"),
-        "uniform-die/v1",
+        UNIFORM_DIE_RULE,
         (1..=sides).map(|face| {
             Candidate::new(
                 face.to_string(),

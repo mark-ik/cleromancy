@@ -5,7 +5,8 @@ mod support;
 
 use cleromancy::moirai::clotho::EntropySource;
 use cleromancy::{
-    CleromancyApp, CleromancyHost, Reading, ReadingEngine, ReadingError, SelectionMode, a2_fixture,
+    CONTEXTUAL_WEIGHT_RULE, CleromancyApp, CleromancyHost, Reading, ReadingEngine, ReadingError,
+    SelectionMode, a2_fixture,
 };
 use graphshell_protocol::Carrier;
 use muniment::RedbBackend;
@@ -35,7 +36,9 @@ fn sealed_external_evidence_qualifies_and_replays_after_endpoint_shutdown() {
     carrier.shutdown().unwrap();
     assert_eq!(truth_bytes(&app.host), before);
 
-    let baseline = ReadingEngine::calculate(&context, &field).unwrap();
+    let mut baseline_field = field.clone();
+    baseline_field.rules = CONTEXTUAL_WEIGHT_RULE.to_string();
+    let baseline = ReadingEngine::calculate(&context, &baseline_field).unwrap();
     assert_eq!(baseline.candidate_id, "threshold");
     assert_eq!(baseline.receipt.qualified_weights, [6, 3, 2]);
     assert!(baseline.receipt.enrichment.is_none());

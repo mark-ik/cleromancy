@@ -6,7 +6,9 @@ use thiserror::Error;
 
 use crate::context::ContextSnapshot;
 use crate::enrichment::SealedEnrichment;
-use crate::field::Field;
+use crate::field::{
+    CONTEXTUAL_WEIGHT_RULE, EXTERNAL_TERM_WEIGHT_RULE, Field, UNIFORM_DIE_RULE, UNIFORM_RULE,
+};
 use crate::moirai::{atropos, clotho, lachesis};
 
 pub const EXTERNAL_QUALIFICATION_ALGORITHM: &str =
@@ -74,6 +76,14 @@ pub enum ReadingError {
     EmptyWeight,
     #[error("candidate id is empty or duplicated: {0}")]
     InvalidCandidate(String),
+    #[error("qualification rule is unsupported: {0}")]
+    UnsupportedRule(String),
+    #[error("qualification rule requires sealed evidence: {0}")]
+    QualificationEvidenceRequired(String),
+    #[error("uniform rule requires candidate {candidate} to have base weight 1, found {weight}")]
+    NonUniformCandidate { candidate: String, weight: u64 },
+    #[error("qualification rule requires cast selection: {0}")]
+    QualificationRequiresCast(String),
     #[error("qualified weight overflowed u64")]
     WeightOverflow,
     #[error("operating-system entropy failed: {0}")]
@@ -92,6 +102,7 @@ pub struct ReadingEngine;
 impl ReadingEngine {
     pub fn calculate(context: &ContextSnapshot, field: &Field) -> Result<Reading, ReadingError> {
         let qualified = lachesis::qualify(context, field)?;
+        require_calculable(field)?;
         let index = lachesis::calculated_index(&qualified)?;
         Ok(atropos::seal(
             field,
@@ -207,6 +218,7 @@ impl ReadingEngine {
             SelectionMode::Calculated => {
                 check(receipt.sample.is_none(), "calculated sample")?;
                 check(receipt.event_nonce.is_none(), "calculated nonce")?;
+                require_calculable(field)?;
                 lachesis::calculated_index(&qualified)?
             }
             SelectionMode::Cast => {
@@ -281,15 +293,7 @@ fn make_receipt(
         }
         .to_string(),
         mode,
-        algorithm: match (mode, enriched) {
-            (SelectionMode::Calculated, false) => "contextual-weight/max/v1",
-            (SelectionMode::Cast, false) => "os-csprng/rejection-u64+contextual-weight/v1",
-            (SelectionMode::Calculated, true) => "contextual-weight+external-term-share/max/v1",
-            (SelectionMode::Cast, true) => {
-                "os-csprng/rejection-u64+contextual-weight+external-term-share/v1"
-            }
-        }
-        .to_string(),
+        algorithm: receipt_algorithm(field, mode, enriched).to_string(),
         context_digest: context.digest(),
         field_digest: field.digest(),
         enrichment,
@@ -299,6 +303,33 @@ fn make_receipt(
         event_nonce: selection.event_nonce,
         selected_index: index,
         selected_candidate: field.candidates[index].id.clone(),
+    }
+}
+
+fn receipt_algorithm(field: &Field, mode: SelectionMode, enriched: bool) -> &'static str {
+    match (field.rules.as_str(), mode, enriched) {
+        (CONTEXTUAL_WEIGHT_RULE, SelectionMode::Calculated, false) => "contextual-weight/max/v1",
+        (CONTEXTUAL_WEIGHT_RULE, SelectionMode::Cast, false) => {
+            "os-csprng/rejection-u64+contextual-weight/v1"
+        }
+        (UNIFORM_RULE, SelectionMode::Cast, false) => "os-csprng/rejection-u64+uniform/v1",
+        (UNIFORM_DIE_RULE, SelectionMode::Cast, false) => "os-csprng/rejection-u64+uniform-die/v1",
+        (EXTERNAL_TERM_WEIGHT_RULE, SelectionMode::Calculated, true) => {
+            "contextual-weight+external-term-share/max/v1"
+        }
+        (EXTERNAL_TERM_WEIGHT_RULE, SelectionMode::Cast, true) => {
+            "os-csprng/rejection-u64+contextual-weight+external-term-share/v1"
+        }
+        _ => unreachable!("qualification succeeded only for a supported rule and evidence mode"),
+    }
+}
+
+fn require_calculable(field: &Field) -> Result<(), ReadingError> {
+    match field.rules.as_str() {
+        UNIFORM_RULE | UNIFORM_DIE_RULE => {
+            Err(ReadingError::QualificationRequiresCast(field.rules.clone()))
+        }
+        _ => Ok(()),
     }
 }
 
