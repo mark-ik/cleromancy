@@ -8,6 +8,10 @@ repository = "https://github.com/merely-made/cleromancy"
 keywords = ["divination", "randomness", "local-first", "graph"]
 categories = ["gui"]
 
+[features]
+default = []
+personal-sync = ["graphshell/personal-sync", "dep:personae", "dep:uuid"]
+
 [dependencies]
 blake3 = "1"
 chartulary = { git = "https://github.com/merely-made/mere.git", branch = "main" }
@@ -20,6 +24,7 @@ graphshell-protocol = { git = "https://github.com/merely-made/mere.git", branch 
 graphshell-stdio = { git = "https://github.com/merely-made/mere.git", branch = "main" }
 mere = { git = "https://github.com/merely-made/mere.git", branch = "main", default-features = false, features = ["graph", "canvas"] }
 muniment = { git = "https://github.com/merely-made/mere.git", branch = "main", features = ["redb"] }
+personae = { git = "https://github.com/merely-made/mere.git", branch = "main", optional = true }
 pollster = "0.4"
 rand_core = { version = "0.6", features = ["getrandom"] }
 sceno = { git = "https://github.com/merely-made/mere.git", branch = "main" }
@@ -28,6 +33,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 servitor = { git = "https://github.com/merely-made/mere.git", branch = "main" }
 thiserror = "2"
+uuid = { version = "1", features = ["serde"], optional = true }
+
+[[bin]]
+name = "a4_sync_receipt"
+path = "src/bin/a4_sync_receipt.rs"
+required-features = ["personal-sync"]
 
 [dev-dependencies]
 tempfile = "3"

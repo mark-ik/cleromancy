@@ -101,6 +101,31 @@ cargo run --bin a3_intent_receipt -- `
 The full boundary and result contract are in
 `design_docs/2026-08-03_a3_bound_intents.md`.
 
+## A4
+
+A4 maps selected Cleromancy contexts and readings onto Graphshell H7's signed
+personal-graph operations. Sync is compiled with the `personal-sync` feature
+and remains off until the user selects contexts or contexts with readings.
+Graphshell retains identity, roster admission, causal storage, conflict
+detection, and transport ownership.
+
+Context facts can be sensitive. H7 protects admitted writers and network
+transport, but A4 does not claim that its retained operation store is encrypted
+at rest. Concurrent values for a selected Cleromancy facet are refused, and
+deletions are not imported in this slice.
+
+```powershell
+cargo test --features personal-sync --test a4
+cargo run --features personal-sync --bin a4_sync_receipt -- `
+  receipts/a4-sync.html `
+  receipts/a4-sync.json
+```
+
+The proof exchanges one signed operation between independent in-memory H7
+replicas. It proves the product adapter and rematerialization path, not a fresh
+resident LogSync or physical-network run. See
+`design_docs/2026-08-03_a4_personal_sync_adapter.md`.
+
 ## License
 
 MIT OR Apache-2.0.

@@ -13,6 +13,8 @@ pub mod moirai;
 mod projection;
 pub mod reading;
 pub mod servitors;
+#[cfg(all(feature = "personal-sync", not(target_arch = "wasm32")))]
+pub mod sync;
 
 pub use app::{AppError, CleromancyApp};
 pub use context::ContextSnapshot;
@@ -32,6 +34,11 @@ pub use reading::{
 };
 pub use servitor;
 pub use servitors::{ServitorAccess, ServitorAccessError};
+#[cfg(all(feature = "personal-sync", not(target_arch = "wasm32")))]
+pub use sync::{
+    CleromancySyncBatch, CleromancySyncError, CleromancySyncImport, CleromancySyncSelection,
+    SYNC_BATCH_SCHEMA, export_sync_batch, import_sync_projection,
+};
 
 /// Stable fixture used by the A0 executable and integration receipts.
 pub fn a0_fixture() -> (ContextSnapshot, Field) {
