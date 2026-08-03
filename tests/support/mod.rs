@@ -24,7 +24,7 @@ pub fn fixture_carrier() -> FixtureCarrier {
     );
     let reading = ReadingEngine::calculate(&context, &field).unwrap();
     let mut host = CleromancyHost::empty(MemoryBackend::new());
-    host.insert_reading(&context, &reading).unwrap();
+    host.insert_reading(&context, &field, &reading).unwrap();
     FixtureCarrier {
         host,
         session: ProjectionSession("external:fixture".to_string()),

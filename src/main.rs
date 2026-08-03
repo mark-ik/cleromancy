@@ -17,8 +17,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (context, field) = a0_fixture();
         let calculated = ReadingEngine::calculate(&context, &field)?;
         let cast = ReadingEngine::cast(&context, &field)?;
-        host.insert_reading(&context, &calculated)?;
-        host.insert_reading(&context, &cast)?;
+        host.insert_reading(&context, &field, &calculated)?;
+        host.insert_reading(&context, &field, &cast)?;
         let saved_at_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();

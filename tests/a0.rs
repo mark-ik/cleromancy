@@ -61,8 +61,8 @@ fn mere_truth_reopens_and_graphshell_resolves_every_card() {
 
     {
         let mut host = CleromancyHost::empty(backend.clone());
-        host.insert_reading(&context, &calculated).unwrap();
-        host.insert_reading(&context, &cast).unwrap();
+        host.insert_reading(&context, &field, &calculated).unwrap();
+        host.insert_reading(&context, &field, &cast).unwrap();
         pollster::block_on(host.persist(123)).unwrap();
     }
 
@@ -71,7 +71,7 @@ fn mere_truth_reopens_and_graphshell_resolves_every_card() {
         .unwrap();
     let mut host = pollster::block_on(CleromancyHost::open(backend.clone())).unwrap();
     assert!(host.was_reopened());
-    assert_eq!(host.graph().nodes().count(), 3);
+    assert_eq!(host.graph().nodes().count(), 4);
     assert_eq!(
         host.graph()
             .relations()
@@ -79,7 +79,7 @@ fn mere_truth_reopens_and_graphshell_resolves_every_card() {
                 relation.kind == RelationKind::Provenance(ProvenanceSubKind::GeneratedFrom)
             })
             .count(),
-        2
+        4
     );
     pollster::block_on(host.persist(123)).unwrap();
     let after = pollster::block_on(backend.get(cleromancy::host::HOST_SLOT))
@@ -89,7 +89,7 @@ fn mere_truth_reopens_and_graphshell_resolves_every_card() {
 
     let mut app = CleromancyApp::new(host);
     let presentations = app.mount_local().unwrap();
-    assert_eq!(presentations.len(), 3);
+    assert_eq!(presentations.len(), 4);
     assert!(
         presentations
             .iter()

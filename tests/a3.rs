@@ -3,7 +3,7 @@
 
 use cleromancy::servitor::{Cap, Grant, Mode, Subject};
 use cleromancy::{
-    CleromancyApp, CleromancyHost, READ_INTENT, READ_SCOPE, ROLL_INTENT, Reading, ReadingEngine,
+    CleromancyApp, CleromancyHost, READ_INTENT, READ_SCOPE, ROLL_INTENT, Reading,
     ReadingIntentPayload, RollIntentPayload, SELECT_INTENT, a0_fixture,
 };
 use graphshell_local::LocalCarrier;
@@ -96,7 +96,7 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
         })
         .unwrap();
     assert_eq!(
-        ReadingEngine::replay(&context, &field, &calculated.receipt).unwrap(),
+        carrier.endpoint().host.replay_reading(calculated).unwrap(),
         calculated.clone()
     );
     let selected = readings
@@ -107,7 +107,7 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
         })
         .unwrap();
     assert_eq!(
-        ReadingEngine::replay(&context, &field, &selected.receipt).unwrap(),
+        carrier.endpoint().host.replay_reading(selected).unwrap(),
         selected.clone()
     );
     let rolled = readings
@@ -115,7 +115,7 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
         .find(|reading| reading.system == "cleromancy.die/d6")
         .unwrap();
     assert_eq!(
-        ReadingEngine::replay(&context, &roll.field(), &rolled.receipt).unwrap(),
+        carrier.endpoint().host.replay_reading(rolled).unwrap(),
         rolled.clone()
     );
     assert!((1..=6).contains(&rolled.candidate_id.parse::<u32>().unwrap()));
@@ -176,7 +176,7 @@ fn payload_identity_cannot_replace_transport_binding_or_servitor_authority() {
         IntentResult::Rejected { reason } if reason.contains("Servitor")
     ));
     assert_eq!(request_intent(&mut carrier, intent), IntentResult::Accepted);
-    assert_eq!(carrier.endpoint().host.graph().nodes().count(), 2);
+    assert_eq!(carrier.endpoint().host.graph().nodes().count(), 3);
     assert_eq!(carrier.endpoint().servitors().audit().revision(), 2);
     assert!(carrier.take_notice().is_some());
 }

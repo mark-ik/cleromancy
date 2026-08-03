@@ -138,7 +138,7 @@ impl<B: Backend> CleromancyApp<B> {
         let scope = scope_for(&intent.intent)
             .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
 
-        let reading = match intent.intent.as_str() {
+        let (field, reading) = match intent.intent.as_str() {
             READ_INTENT | SELECT_INTENT => {
                 let payload = match serde_json::from_slice::<ReadingIntentPayload>(&intent.payload)
                 {
@@ -184,7 +184,7 @@ impl<B: Backend> CleromancyApp<B> {
                     _ => unreachable!("the match is limited to read and select"),
                 };
                 match result {
-                    Ok(reading) => reading,
+                    Ok(reading) => (payload.field, reading),
                     Err(ReadingError::Entropy(error)) => {
                         return Err(AppError::Intent(format!("entropy failed: {error}")));
                     }
@@ -215,7 +215,7 @@ impl<B: Backend> CleromancyApp<B> {
                 }
                 let field = die_field(payload.sides, payload.label.as_deref());
                 match ReadingEngine::cast_with(&context, &field, entropy) {
-                    Ok(reading) => reading,
+                    Ok(reading) => (field, reading),
                     Err(ReadingError::Entropy(error)) => {
                         return Err(AppError::Intent(format!("entropy failed: {error}")));
                     }
@@ -226,7 +226,7 @@ impl<B: Backend> CleromancyApp<B> {
             }
             _ => return Ok(rejected("intent is not implemented")),
         };
-        self.host.insert_reading(&context, &reading)?;
+        self.host.insert_reading(&context, &field, &reading)?;
         self.pending_notice = true;
         Ok(IntentResult::Accepted)
     }

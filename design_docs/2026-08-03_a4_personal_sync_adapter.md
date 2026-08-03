@@ -15,18 +15,20 @@ transport. Cleromancy owns only the mapping between its domain graph and H7's
 transmit, or grant anything. The caller gives its events to an admitted
 `PersonalGraphReplica` or resident `PersonalSyncHost`. `import_sync_projection`
 accepts H7's already-materialized projection, validates all selected domain
-facets, then merges contexts and readings into the local Cleromancy graph.
+facets, then merges contexts, fields, and readings into the local Cleromancy
+graph.
 
 The `personal-sync` Cargo feature is optional. Runtime selection defaults to
 `Off` and offers three settings:
 
 - `Off` exports nothing;
 - `Contexts` exports context nodes and `cleromancy.context/v1` facets;
-- `ContextsAndReadings` also exports reading nodes,
-  `cleromancy.reading/v1` facets, and `GeneratedFrom` relations.
+- `ContextsAndReadings` also exports exact candidate-field nodes, reading
+  nodes, their facets, and `GeneratedFrom` relations.
 
-Reading sync includes contexts by construction. A receipt whose bound context
-is absent would preserve an answer while discarding part of its workings.
+Reading sync includes contexts and fields by construction. A receipt whose
+bound context or field is absent would preserve an answer while discarding
+part of its workings.
 
 ## Privacy
 
@@ -44,17 +46,19 @@ identity or paired peer.
 
 Every exported node must retain its canonical `cleromancy://` address and the
 Mere UUID derived from that address. Export order is stable: context nodes,
-reading nodes, then reading-to-context relations. Tags and nodes are sorted,
-and the complete versioned batch receives a BLAKE3 digest.
+field nodes, reading nodes, then reading-to-context and reading-to-field
+relations. Tags and nodes are sorted, and the complete versioned batch receives
+a BLAKE3 digest. A5 advances that wrapper to `cleromancy.sync-batch/v2` when it
+adds required field provenance.
 
 Import validates the complete selected projection before changing local truth.
 It refuses:
 
 - operations waiting for missing causal history;
-- unresolved concurrent values for either selected Cleromancy facet;
-- malformed context or reading facets;
+- unresolved concurrent values for any selected Cleromancy facet;
+- malformed context, field, or reading facets;
 - node IDs or addresses which do not match their domain content;
-- readings whose bound context is absent.
+- readings whose bound context or exact candidate field is absent.
 
 A4 imports additions and idempotent updates. It does not import deletion. A
 generic personal-graph removal therefore cannot erase a local Cleromancy
@@ -77,8 +81,8 @@ for a resident Cleromancy composition test.
 ## Acceptance
 
 1. The default selection exports zero events.
-2. A full batch contains one context, one reading, and their provenance, with a
-   stable digest.
+2. A full batch contains one context, one field, one reading, and their
+   provenance, with a stable digest.
 3. An independent admitted H7 replica accepts and attributes the signed batch.
 4. Imported truth exports back to byte-equivalent events and the reading
    replays without contacting its source replica.

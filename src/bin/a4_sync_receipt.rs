@@ -47,7 +47,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (context, field) = a0_fixture();
     let reading = ReadingEngine::calculate(&context, &field)?;
     let mut source = CleromancyHost::empty(MemoryBackend::new());
-    source.insert_reading(&context, &reading)?;
+    source.insert_reading(&context, &field, &reading)?;
     let selection = CleromancySyncSelection::ContextsAndReadings;
     let batch = export_sync_batch(&source, selection)?;
 
@@ -85,11 +85,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .next()
         .ok_or("the synced projection contained no reading")?;
-    if ReadingEngine::replay(&context, &field, &synced_reading.receipt)? != synced_reading {
+    if target.replay_reading(&synced_reading)? != synced_reading {
         return Err("the synced reading did not replay".into());
     }
     let receipt = SyncReceipt {
-        schema: "cleromancy.proof/a4-personal-sync-v1",
+        schema: "cleromancy.proof/a4-personal-sync-v2",
         evidence: "signed operation accepted by an independent Graphshell H7 replica",
         transport_evidence: "in-memory operation exchange; resident LogSync transport not exercised",
         selection,
@@ -105,10 +105,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     write(&html_path, app.receipt_html()?.as_bytes())?;
     write(&json_path, &serde_json::to_vec_pretty(&receipt)?)?;
     println!(
-        "accepted {} signed H7 events from {}; imported {} context and {} reading; replay passed; wrote {} and {}",
+        "accepted {} signed H7 events from {}; imported {} context, {} field, and {} reading; replay passed; wrote {} and {}",
         receipt.events,
         &receipt.writer_subject[..12],
         receipt.imported.contexts,
+        receipt.imported.fields,
         receipt.imported.readings,
         html_path.display(),
         json_path.display()

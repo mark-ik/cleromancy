@@ -104,7 +104,8 @@ The full boundary and result contract are in
 ## A4
 
 A4 maps selected Cleromancy contexts and readings onto Graphshell H7's signed
-personal-graph operations. Sync is compiled with the `personal-sync` feature
+personal-graph operations. Reading sync also carries each exact candidate
+field required for replay. Sync is compiled with the `personal-sync` feature
 and remains off until the user selects contexts or contexts with readings.
 Graphshell retains identity, roster admission, causal storage, conflict
 detection, and transport ownership.
@@ -125,6 +126,29 @@ The proof exchanges one signed operation between independent in-memory H7
 replicas. It proves the product adapter and rematerialization path, not a fresh
 resident LogSync or physical-network run. See
 `design_docs/2026-08-03_a4_personal_sync_adapter.md`.
+
+## A5
+
+A5 makes the candidate field first-class graph truth. Every accepted reading
+now points to both its context and a digest-addressed `cleromancy.field/v1`
+node containing the exact candidates, rules, weights, tags, and authored
+interpretations used. Equal fields deduplicate; `CleromancyHost::replay_reading`
+resolves both dependencies from the graph, so an A3 caller or catalog does not
+need to remain installed.
+
+Graphshell projects fields as visible cards. Full A4 reading sync includes
+them, refuses unresolved field conflicts, and rejects a reading whose field is
+absent before changing local truth. Context-only sync does not carry fields.
+
+```powershell
+cargo test --test a5
+cargo run --bin a5_field_receipt -- `
+  receipts/a5-field.html `
+  receipts/a5-field.json
+```
+
+See `design_docs/2026-08-03_a5_field_provenance.md` for the compatibility and
+privacy boundary.
 
 ## License
 

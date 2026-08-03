@@ -19,13 +19,13 @@ fn signed_personal_replicas_rematerialize_a_replayable_reading() {
         let (context, field) = a0_fixture();
         let reading = ReadingEngine::calculate(&context, &field).unwrap();
         let mut source = CleromancyHost::empty(MemoryBackend::new());
-        source.insert_reading(&context, &reading).unwrap();
+        source.insert_reading(&context, &field, &reading).unwrap();
 
         let off = export_sync_batch(&source, CleromancySyncSelection::Off).unwrap();
         assert!(off.is_empty(), "personal sync is opt-in");
         let selection = CleromancySyncSelection::ContextsAndReadings;
         let batch = export_sync_batch(&source, selection).unwrap();
-        assert_eq!((batch.contexts, batch.readings), (1, 1));
+        assert_eq!((batch.contexts, batch.fields, batch.readings), (1, 1, 1));
 
         let alice_identity = InMemoryProvider::from_seed([0x11; 32]);
         let bob_identity = InMemoryProvider::from_seed([0x22; 32]);
@@ -59,10 +59,13 @@ fn signed_personal_replicas_rematerialize_a_replayable_reading() {
 
         let mut target = CleromancyHost::empty(MemoryBackend::new());
         let imported = import_sync_projection(&mut target, &projection, selection).unwrap();
-        assert_eq!((imported.contexts, imported.readings), (1, 1));
+        assert_eq!(
+            (imported.contexts, imported.fields, imported.readings),
+            (1, 1, 1)
+        );
         let imported_reading = readings(&target).pop().unwrap();
         assert_eq!(
-            ReadingEngine::replay(&context, &field, &imported_reading.receipt).unwrap(),
+            target.replay_reading(&imported_reading).unwrap(),
             imported_reading
         );
 
@@ -78,7 +81,7 @@ fn concurrent_cleromancy_facet_values_are_not_silently_imported() {
         let (context, field) = a0_fixture();
         let reading = ReadingEngine::calculate(&context, &field).unwrap();
         let mut source = CleromancyHost::empty(MemoryBackend::new());
-        source.insert_reading(&context, &reading).unwrap();
+        source.insert_reading(&context, &field, &reading).unwrap();
         let selection = CleromancySyncSelection::ContextsAndReadings;
         let batch = export_sync_batch(&source, selection).unwrap();
         let mut altered = batch.events.clone();
@@ -138,6 +141,45 @@ fn concurrent_cleromancy_facet_values_are_not_silently_imported() {
             import_sync_projection(&mut target, &projection, selection),
             Err(CleromancySyncError::Conflict(target))
                 if target.ends_with(cleromancy::host::CONTEXT_FACET)
+        ));
+        assert!(target.is_empty());
+    });
+}
+
+#[test]
+fn reading_without_its_field_is_rejected_before_import() {
+    pollster::block_on(async {
+        let (context, field) = a0_fixture();
+        let reading = ReadingEngine::calculate(&context, &field).unwrap();
+        let mut source = CleromancyHost::empty(MemoryBackend::new());
+        source.insert_reading(&context, &field, &reading).unwrap();
+        let selection = CleromancySyncSelection::ContextsAndReadings;
+        let mut events = export_sync_batch(&source, selection).unwrap().events;
+        events.retain(|event| {
+            !matches!(
+                event,
+                PersonalGraphEvent::SetFacet { facet, .. }
+                    if facet == cleromancy::host::FIELD_FACET
+            )
+        });
+
+        let identity = InMemoryProvider::from_seed([0x51; 32]);
+        let roster = SyncRoster::new([identity.master_public_key().to_bytes()]);
+        let mut replica = PersonalGraphReplica::for_identity(
+            MemoryBackend::new(),
+            GRAPH,
+            &identity,
+            roster,
+            selection.personal_graph_selection(),
+        )
+        .unwrap();
+        replica.author(events).await.unwrap();
+        let projection = replica.projection().await.unwrap();
+
+        let mut target = CleromancyHost::empty(MemoryBackend::new());
+        assert!(matches!(
+            import_sync_projection(&mut target, &projection, selection),
+            Err(CleromancySyncError::MissingField { reading: id, .. }) if id == reading.id
         ));
         assert!(target.is_empty());
     });

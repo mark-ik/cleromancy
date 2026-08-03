@@ -24,7 +24,7 @@ fn sealed_external_evidence_qualifies_and_replays_after_endpoint_shutdown() {
     let evidence = external.seal(&context).unwrap();
     let report = evidence.verify(&context).unwrap();
 
-    assert_eq!(report.source_cards, 2);
+    assert_eq!(report.source_cards, 3);
     assert_eq!(evidence.evidence_digest.len(), 64);
     assert!(
         evidence
@@ -84,7 +84,9 @@ fn sealed_external_evidence_qualifies_and_replays_after_endpoint_shutdown() {
         Err(ReadingError::InvalidEnrichment(_))
     ));
 
-    app.host.insert_reading(&context, &calculated).unwrap();
+    app.host
+        .insert_reading(&context, &field, &calculated)
+        .unwrap();
     let html = app.receipt_html().unwrap();
     assert!(html.contains("externally-qualified"));
     assert!(html.contains("Evidence digest"));

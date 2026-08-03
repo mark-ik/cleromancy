@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (context, field) = a1_fixture();
     let reading = ReadingEngine::calculate(&context, &field)?;
     let mut host = CleromancyHost::empty(MemoryBackend::new());
-    host.insert_reading(&context, &reading)?;
+    host.insert_reading(&context, &field, &reading)?;
     let mut app = CleromancyApp::new(host);
     let local_cards = app.mount_local()?.len();
 

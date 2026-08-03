@@ -22,15 +22,17 @@ use sceno::{
     Score, Size2, SourceRef, Transform2, Vec2,
 };
 use scenotime::{Revision, SceneEpoch, SceneSnapshot};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{ContextSnapshot, Reading};
+use crate::{ContextSnapshot, Field, Reading, ReadingEngine, ReadingError};
 
 pub const HOST_SLOT: &str = "cleromancy/mere-host/v1";
 pub const LOCAL_SESSION: &str = "local:cleromancy";
 pub const CONTEXT_FACET: &str = "cleromancy.context/v1";
+pub const FIELD_FACET: &str = "cleromancy.field/v1";
 pub const READING_FACET: &str = "cleromancy.reading/v1";
 
 #[derive(Debug, Error)]
@@ -45,6 +47,12 @@ pub enum HostError {
     WrongSession,
     #[error("resource was not disclosed by this session")]
     MissingResource,
+    #[error("reading requires stored {kind} {digest}")]
+    MissingReadingDependency { kind: &'static str, digest: String },
+    #[error("stored {facet} facet does not decode: {reason}")]
+    InvalidStoredFacet { facet: &'static str, reason: String },
+    #[error(transparent)]
+    Reading(#[from] ReadingError),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -172,12 +180,29 @@ impl<B: Backend> CleromancyHost<B> {
         Ok(key)
     }
 
+    /// Retain the complete candidate field as first-class graph truth. The
+    /// digest-addressed node is shared by every reading made from this exact
+    /// field, so replay does not depend on a catalog or caller remaining
+    /// installed.
+    pub fn insert_field(&mut self, field: &Field) -> Result<NodeKey, HostError> {
+        let address = format!("cleromancy://field/{}", field.digest());
+        let key = self.upsert_node(&address, &field.system, ["field", field.system.as_str()]);
+        self.set_facet(key, FIELD_FACET, serde_json::to_value(field).unwrap())?;
+        Ok(key)
+    }
+
     pub fn insert_reading(
         &mut self,
         context: &ContextSnapshot,
+        field: &Field,
         reading: &Reading,
     ) -> Result<NodeKey, HostError> {
+        let replayed = ReadingEngine::replay(context, field, &reading.receipt)?;
+        if replayed != *reading {
+            return Err(ReadingError::ReceiptMismatch("sealed reading".to_string()).into());
+        }
         let context_key = self.insert_context(context)?;
+        let field_key = self.insert_field(field)?;
         let address = format!("cleromancy://reading/{}", reading.id);
         let mode = format!("{:?}", reading.receipt.mode).to_lowercase();
         let mut tags = vec!["reading", mode.as_str(), reading.system.as_str()];
@@ -194,13 +219,64 @@ impl<B: Backend> CleromancyHost<B> {
                 sub_kind: ProvenanceSubKind::GeneratedFrom,
             },
         );
+        assert_relation(
+            &mut self.graph,
+            key,
+            field_key,
+            EdgeAssertion::Provenance {
+                sub_kind: ProvenanceSubKind::GeneratedFrom,
+            },
+        );
         self.changed();
         Ok(key)
+    }
+
+    /// Replay a reading from graph-resident truth alone. The caller supplies
+    /// neither its context nor its candidate field.
+    pub fn replay_reading(&self, reading: &Reading) -> Result<Reading, HostError> {
+        let context = self.stored_facet::<ContextSnapshot>(
+            &format!("cleromancy://context/{}", reading.receipt.context_digest),
+            CONTEXT_FACET,
+            "context",
+            &reading.receipt.context_digest,
+        )?;
+        let field = self.stored_facet::<Field>(
+            &format!("cleromancy://field/{}", reading.receipt.field_digest),
+            FIELD_FACET,
+            "field",
+            &reading.receipt.field_digest,
+        )?;
+        Ok(ReadingEngine::replay(&context, &field, &reading.receipt)?)
     }
 
     pub fn facet_value(&self, key: NodeKey, facet: &str) -> Option<&Value> {
         let node = self.graph.get_node(key)?;
         self.graph.facets().get(&node.id, &FacetId::new(facet))
+    }
+
+    fn stored_facet<T: DeserializeOwned>(
+        &self,
+        address: &str,
+        facet: &'static str,
+        kind: &'static str,
+        digest: &str,
+    ) -> Result<T, HostError> {
+        let (key, _) = self.graph.get_node_by_url(address).ok_or_else(|| {
+            HostError::MissingReadingDependency {
+                kind,
+                digest: digest.to_string(),
+            }
+        })?;
+        let value =
+            self.facet_value(key, facet)
+                .ok_or_else(|| HostError::MissingReadingDependency {
+                    kind,
+                    digest: digest.to_string(),
+                })?;
+        serde_json::from_value(value.clone()).map_err(|error| HostError::InvalidStoredFacet {
+            facet,
+            reason: error.to_string(),
+        })
     }
 
     pub(crate) fn active_revision(&self) -> Option<(SceneEpoch, Revision)> {
@@ -504,6 +580,28 @@ impl<B: Backend> CleromancyHost<B> {
                     values.extend(enrichment_values);
                 }
             }
+        } else if let Some(value) = self.facet_value(key, FIELD_FACET)
+            && let Ok(field) = serde_json::from_value::<Field>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "System".to_string(),
+                    value: field.system,
+                },
+                CardValueV1 {
+                    label: "Rules".to_string(),
+                    value: field.rules,
+                },
+                CardValueV1 {
+                    label: "Candidates".to_string(),
+                    value: field
+                        .candidates
+                        .iter()
+                        .map(|candidate| format!("{} ({})", candidate.title, candidate.base_weight))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+            ]);
         } else if let Some(value) = self.facet_value(key, CONTEXT_FACET)
             && let Ok(context) = serde_json::from_value::<ContextSnapshot>(value.clone())
         {

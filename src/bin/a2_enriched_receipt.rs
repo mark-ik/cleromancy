@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if replayed != reading {
         return Err("offline replay changed the sealed reading".into());
     }
-    app.host.insert_reading(&context, &reading)?;
+    app.host.insert_reading(&context, &field, &reading)?;
 
     write(&html_path, app.receipt_html()?.as_bytes())?;
     write(&json_path, &serde_json::to_vec_pretty(&reading)?)?;

@@ -14,14 +14,17 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::host::{CONTEXT_FACET, READING_FACET};
-use crate::{CleromancyHost, ContextSnapshot, HostError, Reading};
+use crate::host::{CONTEXT_FACET, FIELD_FACET, READING_FACET};
+use crate::{
+    CleromancyHost, ContextSnapshot, Field, HostError, Reading, ReadingEngine, ReadingError,
+};
 
-pub const SYNC_BATCH_SCHEMA: &str = "cleromancy.sync-batch/v1";
+pub const SYNC_BATCH_SCHEMA: &str = "cleromancy.sync-batch/v2";
 
 /// The explicit local setting controlling which Cleromancy truth may enter
-/// Graphshell's personal graph. Reading sync includes its contexts because a
-/// receipt without the context it binds cannot be independently understood.
+/// Graphshell's personal graph. Reading sync includes its contexts and exact
+/// candidate fields because a receipt without either dependency cannot be
+/// independently replayed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CleromancySyncSelection {
@@ -47,6 +50,7 @@ impl CleromancySyncSelection {
             facets.push(CONTEXT_FACET);
         }
         if self.includes_readings() {
+            facets.push(FIELD_FACET);
             facets.push(READING_FACET);
         }
         PersonalSyncSelection::default().with_facets(facets)
@@ -61,6 +65,7 @@ pub struct CleromancySyncBatch {
     pub selection: CleromancySyncSelection,
     pub events: Vec<PersonalGraphEvent>,
     pub contexts: usize,
+    pub fields: usize,
     pub readings: usize,
     pub digest: String,
 }
@@ -78,6 +83,7 @@ impl CleromancySyncBatch {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct CleromancySyncImport {
     pub contexts: usize,
+    pub fields: usize,
     pub readings: usize,
 }
 
@@ -89,6 +95,11 @@ pub enum CleromancySyncError {
     MissingContext {
         reading: String,
         context_digest: String,
+    },
+    #[error("synced reading {reading} has no selected field {field_digest}")]
+    MissingField {
+        reading: String,
+        field_digest: String,
     },
     #[error("personal graph projection has {0} operations waiting for causal history")]
     PendingHistory(usize),
@@ -116,14 +127,24 @@ pub fn export_sync_batch<B: Backend>(
     selection: CleromancySyncSelection,
 ) -> Result<CleromancySyncBatch, CleromancySyncError> {
     let mut contexts = Vec::<(String, SelectedNode)>::new();
+    let mut fields = Vec::<(String, SelectedNode)>::new();
     let mut readings = Vec::<(Reading, SelectedNode)>::new();
 
     if selection.includes_contexts() {
         for (key, node) in host.graph().nodes() {
             let context = host.facet_value(key, CONTEXT_FACET);
+            let field = host.facet_value(key, FIELD_FACET);
             let reading = host.facet_value(key, READING_FACET);
-            if context.is_some() && reading.is_some() {
-                return Err(invalid(node.id, "carries both context and reading facets"));
+            if [context.is_some(), field.is_some(), reading.is_some()]
+                .into_iter()
+                .filter(|present| *present)
+                .count()
+                > 1
+            {
+                return Err(invalid(
+                    node.id,
+                    "carries more than one Cleromancy domain facet",
+                ));
             }
             if let Some(value) = context {
                 let context: ContextSnapshot = serde_json::from_value(value.clone())
@@ -135,6 +156,14 @@ pub fn export_sync_batch<B: Backend>(
                     &format!("cleromancy://context/{digest}"),
                 )?;
                 contexts.push((digest, selected_node(node, CONTEXT_FACET, value.clone())));
+            } else if selection.includes_readings()
+                && let Some(value) = field
+            {
+                let field: Field = serde_json::from_value(value.clone())
+                    .map_err(|e| invalid(node.id, format!("field facet does not decode: {e}")))?;
+                let digest = field.digest();
+                validate_identity(node.id, node.url(), &format!("cleromancy://field/{digest}"))?;
+                fields.push((digest, selected_node(node, FIELD_FACET, value.clone())));
             } else if selection.includes_readings()
                 && let Some(value) = reading
             {
@@ -151,13 +180,21 @@ pub fn export_sync_batch<B: Backend>(
     }
 
     contexts.sort_by_key(|(_, node)| node.id);
+    fields.sort_by_key(|(_, node)| node.id);
     readings.sort_by_key(|(_, node)| node.id);
     let context_ids = contexts
         .iter()
         .map(|(digest, node)| (digest.clone(), node.id))
         .collect::<BTreeMap<_, _>>();
+    let field_ids = fields
+        .iter()
+        .map(|(digest, node)| (digest.clone(), node.id))
+        .collect::<BTreeMap<_, _>>();
     let mut events = Vec::new();
     for (_, node) in &contexts {
+        append_node_events(&mut events, node);
+    }
+    for (_, node) in &fields {
         append_node_events(&mut events, node);
     }
     for (_, node) in &readings {
@@ -177,6 +214,19 @@ pub fn export_sync_batch<B: Backend>(
                 sub_kind: mere::kernel::graph::ProvenanceSubKind::GeneratedFrom,
             },
         });
+        let Some(&field) = field_ids.get(&reading.receipt.field_digest) else {
+            return Err(CleromancySyncError::MissingField {
+                reading: reading.id.clone(),
+                field_digest: reading.receipt.field_digest.clone(),
+            });
+        };
+        events.push(PersonalGraphEvent::AssertRelation {
+            from: node.id,
+            to: field,
+            assertion: EdgeAssertion::Provenance {
+                sub_kind: mere::kernel::graph::ProvenanceSubKind::GeneratedFrom,
+            },
+        });
     }
 
     let digest = batch_digest(selection, &events);
@@ -185,6 +235,7 @@ pub fn export_sync_batch<B: Backend>(
         selection,
         events,
         contexts: contexts.len(),
+        fields: fields.len(),
         readings: readings.len(),
         digest,
     })
@@ -208,23 +259,36 @@ pub fn import_sync_projection<B: Backend>(
     }
     for conflict in &projection.conflicts {
         let context = format!("/facet/{CONTEXT_FACET}");
+        let field = format!("/facet/{FIELD_FACET}");
         let reading = format!("/facet/{READING_FACET}");
         if conflict.target.ends_with(&context)
-            || (selection.includes_readings() && conflict.target.ends_with(&reading))
+            || (selection.includes_readings()
+                && (conflict.target.ends_with(&field) || conflict.target.ends_with(&reading)))
         {
             return Err(CleromancySyncError::Conflict(conflict.target.clone()));
         }
     }
 
     let context_facet = FacetId::new(CONTEXT_FACET);
+    let field_facet = FacetId::new(FIELD_FACET);
     let reading_facet = FacetId::new(READING_FACET);
     let mut contexts = Vec::<ContextSnapshot>::new();
+    let mut fields = Vec::<Field>::new();
     let mut readings = Vec::<Reading>::new();
     for (_, node) in projection.graph.nodes() {
         let context = projection.graph.facets().get(&node.id, &context_facet);
+        let field = projection.graph.facets().get(&node.id, &field_facet);
         let reading = projection.graph.facets().get(&node.id, &reading_facet);
-        if context.is_some() && reading.is_some() {
-            return Err(invalid(node.id, "carries both context and reading facets"));
+        if [context.is_some(), field.is_some(), reading.is_some()]
+            .into_iter()
+            .filter(|present| *present)
+            .count()
+            > 1
+        {
+            return Err(invalid(
+                node.id,
+                "carries more than one Cleromancy domain facet",
+            ));
         }
         if let Some(value) = context {
             let context: ContextSnapshot = serde_json::from_value(value.clone())
@@ -235,6 +299,17 @@ pub fn import_sync_projection<B: Backend>(
                 &format!("cleromancy://context/{}", context.digest()),
             )?;
             contexts.push(context);
+        } else if selection.includes_readings()
+            && let Some(value) = field
+        {
+            let field: Field = serde_json::from_value(value.clone())
+                .map_err(|e| invalid(node.id, format!("field facet does not decode: {e}")))?;
+            validate_identity(
+                node.id,
+                node.url(),
+                &format!("cleromancy://field/{}", field.digest()),
+            )?;
+            fields.push(field);
         } else if selection.includes_readings()
             && let Some(value) = reading
         {
@@ -249,28 +324,55 @@ pub fn import_sync_projection<B: Backend>(
         }
     }
     contexts.sort_by_key(|context| context.digest());
+    fields.sort_by_key(Field::digest);
     readings.sort_by(|left, right| left.id.cmp(&right.id));
     let contexts_by_digest = contexts
         .iter()
         .map(|context| (context.digest(), context))
         .collect::<BTreeMap<_, _>>();
+    let fields_by_digest = fields
+        .iter()
+        .map(|field| (field.digest(), field))
+        .collect::<BTreeMap<_, _>>();
     for reading in &readings {
-        if !contexts_by_digest.contains_key(&reading.receipt.context_digest) {
+        let Some(context) = contexts_by_digest.get(&reading.receipt.context_digest) else {
             return Err(CleromancySyncError::MissingContext {
                 reading: reading.id.clone(),
                 context_digest: reading.receipt.context_digest.clone(),
             });
+        };
+        let Some(field) = fields_by_digest.get(&reading.receipt.field_digest) else {
+            return Err(CleromancySyncError::MissingField {
+                reading: reading.id.clone(),
+                field_digest: reading.receipt.field_digest.clone(),
+            });
+        };
+        let replayed =
+            ReadingEngine::replay(context, field, &reading.receipt).map_err(HostError::from)?;
+        if replayed != *reading {
+            return Err(HostError::Reading(ReadingError::ReceiptMismatch(
+                "sealed reading".to_string(),
+            ))
+            .into());
         }
     }
 
     for context in &contexts {
         host.insert_context(context)?;
     }
+    for field in &fields {
+        host.insert_field(field)?;
+    }
     for reading in &readings {
-        host.insert_reading(contexts_by_digest[&reading.receipt.context_digest], reading)?;
+        host.insert_reading(
+            contexts_by_digest[&reading.receipt.context_digest],
+            fields_by_digest[&reading.receipt.field_digest],
+            reading,
+        )?;
     }
     Ok(CleromancySyncImport {
         contexts: contexts.len(),
+        fields: fields.len(),
         readings: readings.len(),
     })
 }
