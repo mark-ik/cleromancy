@@ -1,0 +1,90 @@
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Context-qualified deterministic and cleromantic readings over a Mere graph.
+
+pub mod app;
+pub mod context;
+pub mod enrichment;
+pub mod field;
+pub mod host;
+pub mod moirai;
+mod projection;
+pub mod reading;
+pub mod servitors;
+
+pub use app::{AppError, CleromancyApp};
+pub use context::ContextSnapshot;
+pub use enrichment::{
+    EnrichmentMatch, EnrichmentReport, EnrichmentSource, EnrichmentValue, ExternalProjection,
+    SealedEnrichment,
+};
+pub use field::{Candidate, Field};
+pub use host::{CleromancyHost, HostError};
+pub use reading::{
+    EXTERNAL_QUALIFICATION_ALGORITHM, EnrichmentQualification, Reading, ReadingEngine,
+    ReadingError, Receipt, SelectionMode,
+};
+pub use servitor;
+pub use servitors::ServitorAccess;
+
+/// Stable fixture used by the A0 executable and integration receipts.
+pub fn a0_fixture() -> (ContextSnapshot, Field) {
+    let context = ContextSnapshot::new("A threshold", "cleromancy.fixture-context/v1")
+        .with_fact("question", "What deserves attention at this threshold?")
+        .with_fact("season", "late summer")
+        .with_tags(["change", "structure", "reflection"]);
+    let field = Field::new(
+        "cleromancy.fixture-system/v1",
+        "contextual-weight/v1",
+        [
+            Candidate::new(
+                "threshold",
+                "Attend to the threshold",
+                "Notice what has already changed before deciding what should change next.",
+            )
+            .with_tags(["change", "reflection"])
+            .with_base_weight(2),
+            Candidate::new(
+                "measure",
+                "Measure the structure",
+                "Name the constraint that is doing useful work and the one that has become habit.",
+            )
+            .with_tags(["structure", "reflection"])
+            .with_base_weight(1),
+            Candidate::new(
+                "wander",
+                "Permit an unplanned move",
+                "Leave one part of the next step deliberately unspecified.",
+            )
+            .with_tags(["change", "play"])
+            .with_base_weight(1),
+        ],
+    );
+    (context, field)
+}
+
+/// A0's context plus explicit browsing terms used by the cross-process A1
+/// Turnstone receipt. They remain ordinary disclosed context, not hidden
+/// personalization.
+pub fn a1_fixture() -> (ContextSnapshot, Field) {
+    let (context, field) = a0_fixture();
+    (
+        context.with_fact(
+            "recent_graph",
+            "Field notes, a radio map, and a harmony map",
+        ),
+        field,
+    )
+}
+
+/// A1's disclosed browsing context plus candidate tags which explicitly opt
+/// into the A2 external-term qualifier.
+pub fn a2_fixture() -> (ContextSnapshot, Field) {
+    let (context, mut field) = a1_fixture();
+    field.rules = "contextual-weight+external-term-share/v1".to_string();
+    field.candidates[1]
+        .tags
+        .extend(["field", "harmony", "notes", "radio"].map(str::to_string));
+    (context, field)
+}

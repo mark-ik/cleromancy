@@ -1,0 +1,32 @@
+[package]
+name = "cleromancy"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Context-qualified deterministic and cleromantic readings over a local-first Mere graph."
+repository = "https://github.com/merely-made/cleromancy"
+keywords = ["divination", "randomness", "local-first", "graph"]
+categories = ["gui"]
+
+[dependencies]
+blake3 = "1"
+chartulary = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+dirs = "6"
+graphshell = { git = "https://github.com/merely-made/mere.git", branch = "main", default-features = false }
+graphshell-client = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+graphshell-endpoint = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+graphshell-protocol = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+graphshell-stdio = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+mere = { git = "https://github.com/merely-made/mere.git", branch = "main", default-features = false, features = ["graph", "canvas"] }
+muniment = { git = "https://github.com/merely-made/mere.git", branch = "main", features = ["redb"] }
+pollster = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+sceno = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+scenotime = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+servitor = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
