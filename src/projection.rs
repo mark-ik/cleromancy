@@ -1,14 +1,17 @@
 // Copyright 2026 Mark AB (markik)
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use graphshell_endpoint::{IntentSink, PresentationSource, ProjectionCatalog, ProjectionSource};
+use graphshell_endpoint::{
+    IntentSink, PresentationSource, ProjectionCatalog, ProjectionNoticeSource, ProjectionSource,
+};
 use graphshell_protocol::{
-    EndpointDescriptor, IntentInvocation, IntentResult, ProjectionOffer, ProjectionRequest,
-    ProjectionSnapshot, ProtocolVersion, ResourceRequest, ResourceResponse,
+    CarrierNotice, EndpointDescriptor, IntentInvocation, IntentResult, ProjectionOffer,
+    ProjectionRequest, ProjectionSnapshot, ProtocolVersion, ResourceRequest, ResourceResponse,
 };
 use muniment::Backend;
 
 use crate::host::{CleromancyHost, HostError};
+use crate::{AppError, CleromancyApp};
 
 impl<B: Backend> ProjectionCatalog for CleromancyHost<B> {
     fn describe(&self) -> EndpointDescriptor {
@@ -63,5 +66,50 @@ impl<B: Backend> IntentSink for CleromancyHost<B> {
         Ok(IntentResult::Rejected {
             reason: "A0 exposes readings as a read-only Graphshell projection".to_string(),
         })
+    }
+}
+
+impl<B: Backend> ProjectionCatalog for CleromancyApp<B> {
+    fn describe(&self) -> EndpointDescriptor {
+        self.host.describe()
+    }
+}
+
+impl<B: Backend> ProjectionSource for CleromancyApp<B> {
+    type Error = AppError;
+
+    fn snapshot(&mut self, request: ProjectionRequest) -> Result<ProjectionSnapshot, Self::Error> {
+        if request.session != self.host.session()
+            || request.version.major != ProtocolVersion::V1.major
+        {
+            return Err(HostError::WrongSession.into());
+        }
+        Ok(self
+            .host
+            .build_snapshot_with_actions(self.intents_are_bound())?)
+    }
+}
+
+impl<B: Backend> PresentationSource for CleromancyApp<B> {
+    type Error = AppError;
+
+    fn resource(&mut self, request: ResourceRequest) -> Result<ResourceResponse, Self::Error> {
+        Ok(self.host.resource(request)?)
+    }
+}
+
+impl<B: Backend> IntentSink for CleromancyApp<B> {
+    type Error = AppError;
+
+    fn invoke(&mut self, intent: IntentInvocation) -> Result<IntentResult, Self::Error> {
+        CleromancyApp::invoke(self, intent)
+    }
+}
+
+impl<B: Backend> ProjectionNoticeSource for CleromancyApp<B> {
+    type Error = AppError;
+
+    fn poll_notice(&mut self) -> Result<Option<CarrierNotice>, Self::Error> {
+        Ok(self.take_projection_notice())
     }
 }

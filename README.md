@@ -78,6 +78,29 @@ cargo run --bin a2_enriched_receipt -- `
   receipts/a2-turnstone-reading.json
 ```
 
+## A3
+
+A3 exposes three context-card commands through Graphshell: deterministic
+`read`, securely random `select`, and uniformly weighted `roll`. The containing
+host binds a Servitor subject outside the payload, and Servitor gates each verb
+at its own scope. Accepted commands append replayable reading cards and announce
+the new projection revision.
+
+The proof carrier is in-process but still round-trips the Graphshell JSON wire.
+It trusts its containing host for identity. Graphshell stdio does not
+authenticate peers and must remain read-only; a remote command service needs an
+authenticated carrier and session admission.
+
+```powershell
+cargo test --test a3
+cargo run --bin a3_intent_receipt -- `
+  receipts/a3-intent.html `
+  receipts/a3-intent.json
+```
+
+The full boundary and result contract are in
+`design_docs/2026-08-03_a3_bound_intents.md`.
+
 ## License
 
 MIT OR Apache-2.0.

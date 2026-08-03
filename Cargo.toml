@@ -15,6 +15,7 @@ dirs = "6"
 graphshell = { git = "https://github.com/merely-made/mere.git", branch = "main", default-features = false }
 graphshell-client = { git = "https://github.com/merely-made/mere.git", branch = "main" }
 graphshell-endpoint = { git = "https://github.com/merely-made/mere.git", branch = "main" }
+graphshell-local = { git = "https://github.com/merely-made/mere.git", branch = "main" }
 graphshell-protocol = { git = "https://github.com/merely-made/mere.git", branch = "main" }
 graphshell-stdio = { git = "https://github.com/merely-made/mere.git", branch = "main" }
 mere = { git = "https://github.com/merely-made/mere.git", branch = "main", default-features = false, features = ["graph", "canvas"] }

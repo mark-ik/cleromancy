@@ -63,6 +63,8 @@ pub struct CleromancyHost<B> {
     pub(crate) projection_epoch: u64,
     pub(crate) projection_revision: u64,
     pub(crate) resources: BTreeMap<ContentHash, Vec<u8>>,
+    active_instances: HashMap<InstanceId, NodeKey>,
+    last_snapshot: Option<(SceneEpoch, Revision)>,
     persisted_document: Option<PersistedHost>,
     dirty: bool,
 }
@@ -75,6 +77,8 @@ impl<B: Backend> CleromancyHost<B> {
             projection_epoch: 1,
             projection_revision: 1,
             resources: BTreeMap::new(),
+            active_instances: HashMap::new(),
+            last_snapshot: None,
             persisted_document: None,
             dirty: true,
         }
@@ -89,6 +93,8 @@ impl<B: Backend> CleromancyHost<B> {
                 projection_epoch: 1,
                 projection_revision: 1,
                 resources: BTreeMap::new(),
+                active_instances: HashMap::new(),
+                last_snapshot: None,
                 persisted_document: None,
                 dirty: true,
             });
@@ -102,6 +108,8 @@ impl<B: Backend> CleromancyHost<B> {
             projection_epoch: saved.projection_epoch,
             projection_revision: saved.projection_revision,
             resources: BTreeMap::new(),
+            active_instances: HashMap::new(),
+            last_snapshot: None,
             persisted_document: Some(persisted_document),
             dirty: false,
         })
@@ -195,6 +203,24 @@ impl<B: Backend> CleromancyHost<B> {
         self.graph.facets().get(&node.id, &FacetId::new(facet))
     }
 
+    pub(crate) fn active_revision(&self) -> Option<(SceneEpoch, Revision)> {
+        self.last_snapshot.map(|_| {
+            (
+                SceneEpoch(self.projection_epoch),
+                Revision(self.projection_revision),
+            )
+        })
+    }
+
+    pub(crate) fn context_for_instance(&self, instance: InstanceId) -> Option<ContextSnapshot> {
+        let key = *self.active_instances.get(&instance)?;
+        serde_json::from_value(self.facet_value(key, CONTEXT_FACET)?.clone()).ok()
+    }
+
+    pub(crate) fn intent_was_advertised(&self, instance: InstanceId, intent: &str) -> bool {
+        self.context_for_instance(instance).is_some() && crate::intents::scope_for(intent).is_some()
+    }
+
     fn upsert_node<'a>(
         &mut self,
         address: &str,
@@ -268,6 +294,13 @@ impl<B: Backend> CleromancyHost<B> {
     }
 
     pub(crate) fn build_snapshot(&mut self) -> Result<ProjectionSnapshot, HostError> {
+        self.build_snapshot_with_actions(false)
+    }
+
+    pub(crate) fn build_snapshot_with_actions(
+        &mut self,
+        advertise_intents: bool,
+    ) -> Result<ProjectionSnapshot, HostError> {
         let layout = mere::canvas::project_canvas_strategy_with_score(
             "phyllotaxis.default",
             &self.graph,
@@ -334,7 +367,13 @@ impl<B: Backend> CleromancyHost<B> {
                         label: node.title.clone(),
                         role: SemanticRole::Article,
                         bounds: BoundsRelationship::FillFootprint,
-                        actions: Vec::new(),
+                        actions: if advertise_intents
+                            && self.facet_value(key, CONTEXT_FACET).is_some()
+                        {
+                            crate::intents::advertised_actions()
+                        } else {
+                            Vec::new()
+                        },
                     },
                 }],
             );
@@ -378,6 +417,11 @@ impl<B: Backend> CleromancyHost<B> {
             scene,
         )
         .map_err(|error| HostError::InvalidSnapshot(format!("{error:?}")))?;
+        self.active_instances = instance_of
+            .into_iter()
+            .map(|(key, instance)| (instance, key))
+            .collect();
+        self.last_snapshot = Some((scene.epoch, scene.revision));
         self.resources = resources;
         Ok(ProjectionSnapshot {
             version: ProtocolVersion::V1,

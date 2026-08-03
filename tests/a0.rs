@@ -110,7 +110,8 @@ fn servitor_access_keeps_scope_and_mode_boundaries() {
     let subject = Subject::new([7; 32]);
     let readings = Cap::scope("cleromancy/readings").unwrap();
     app.servitors_mut()
-        .grant(Grant::new(subject, readings, Mode::Read));
+        .grant(Grant::new(subject, readings, Mode::Read))
+        .unwrap();
 
     assert!(app.servitors().allows(
         subject,

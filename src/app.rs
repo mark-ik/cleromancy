@@ -5,13 +5,21 @@ use graphshell::view::{ProjectionLayoutView, ProjectionReceiptView, render_proje
 use graphshell_client::{
     ClientState, PresentationResolution, ResolvedPresentation, SnapshotApplyError,
 };
-use graphshell_endpoint::{PresentationSource, ProjectionSource};
-use graphshell_protocol::{CapabilityProfile, PresentationCapability};
+use graphshell_endpoint::PresentationSource;
+use graphshell_protocol::{
+    CapabilityProfile, CarrierNotice, IntentInvocation, IntentResult, PresentationCapability,
+};
 use muniment::Backend;
+use servitor::Subject;
 use thiserror::Error;
 
 use crate::enrichment::{EnrichmentError, EnrichmentReport, ExternalProjection, mount_carrier};
-use crate::{CleromancyHost, HostError, ServitorAccess};
+use crate::intents::{
+    IntentLimits, READ_INTENT, READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA, ReadingIntentPayload,
+    RollIntentPayload, SELECT_INTENT, SELECT_SCHEMA, die_field, scope_for,
+};
+use crate::moirai::clotho::{EntropySource, OsEntropy};
+use crate::{CleromancyHost, HostError, ReadingEngine, ReadingError, ServitorAccess};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -21,6 +29,8 @@ pub enum AppError {
     Snapshot(SnapshotApplyError),
     #[error("Graphshell client: {0}")]
     Client(String),
+    #[error("Cleromancy intent: {0}")]
+    Intent(String),
 }
 
 /// A small product composition: Cleromancy owns readings, Graphshell owns the
@@ -30,6 +40,9 @@ pub struct CleromancyApp<B> {
     pub host: CleromancyHost<B>,
     client: ClientState,
     servitors: ServitorAccess,
+    intent_subject: Option<Subject>,
+    intent_limits: IntentLimits,
+    pending_notice: bool,
 }
 
 impl<B: Backend> CleromancyApp<B> {
@@ -38,6 +51,9 @@ impl<B: Backend> CleromancyApp<B> {
             host,
             client: ClientState::default(),
             servitors: ServitorAccess::new(),
+            intent_subject: None,
+            intent_limits: IntentLimits::default(),
+            pending_notice: false,
         }
     }
 
@@ -53,11 +69,191 @@ impl<B: Backend> CleromancyApp<B> {
         &mut self.servitors
     }
 
+    /// Bind the peer identity proved by the containing transport. Intent
+    /// payloads never get to assert their own subject.
+    pub fn bind_intent_subject(&mut self, subject: Subject) {
+        self.intent_subject = Some(subject);
+    }
+
+    pub fn clear_intent_subject(&mut self) {
+        self.intent_subject = None;
+    }
+
+    pub fn intent_limits(&self) -> IntentLimits {
+        self.intent_limits
+    }
+
+    pub fn set_intent_limits(&mut self, limits: IntentLimits) {
+        self.intent_limits = limits;
+    }
+
+    pub(crate) fn intents_are_bound(&self) -> bool {
+        self.intent_subject.is_some()
+    }
+
+    /// Lower an advertised Graphshell command through the bound Servitor
+    /// subject. Production dispatch supplies OS entropy; tests may inject a
+    /// deterministic source without creating a second command path.
+    pub fn invoke_with_entropy(
+        &mut self,
+        intent: IntentInvocation,
+        entropy: &mut impl EntropySource,
+    ) -> Result<IntentResult, AppError> {
+        if intent.session != self.host.session() {
+            return Err(AppError::Intent(
+                "intent names another projection session".to_string(),
+            ));
+        }
+        let Some((epoch, revision)) = self.host.active_revision() else {
+            return Err(AppError::Intent(
+                "intent arrived before a projection snapshot".to_string(),
+            ));
+        };
+        if intent.observed_epoch != epoch || intent.observed_revision != revision {
+            return Ok(IntentResult::Stale {
+                current_epoch: epoch,
+                current_revision: revision,
+            });
+        }
+        if !self
+            .host
+            .intent_was_advertised(intent.target, &intent.intent)
+        {
+            return Ok(rejected(
+                "target or intent was not advertised by this snapshot",
+            ));
+        }
+        if intent.payload.len() > self.intent_limits.max_payload_bytes {
+            return Ok(rejected("payload exceeds the configured byte limit"));
+        }
+        let Some(subject) = self.intent_subject else {
+            return Ok(rejected(
+                "the containing transport did not bind an authenticated subject",
+            ));
+        };
+        let context = self
+            .host
+            .context_for_instance(intent.target)
+            .ok_or_else(|| AppError::Intent("advertised context disappeared".to_string()))?;
+        let scope = scope_for(&intent.intent)
+            .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
+
+        let reading = match intent.intent.as_str() {
+            READ_INTENT | SELECT_INTENT => {
+                let payload = match serde_json::from_slice::<ReadingIntentPayload>(&intent.payload)
+                {
+                    Ok(payload) => payload,
+                    Err(error) => return Ok(rejected(format!("invalid reading payload: {error}"))),
+                };
+                let expected_schema = if intent.intent == READ_INTENT {
+                    READ_SCHEMA
+                } else {
+                    SELECT_SCHEMA
+                };
+                if payload.schema != expected_schema {
+                    return Ok(rejected("reading payload schema does not match the intent"));
+                }
+                if payload.field.candidates.is_empty()
+                    || payload.field.candidates.len() > self.intent_limits.max_candidates
+                {
+                    return Ok(rejected(
+                        "candidate count is outside the configured intent limits",
+                    ));
+                }
+                if self
+                    .servitors
+                    .petition_write(subject, scope, format!("{} request", intent.intent))
+                    .is_err()
+                {
+                    return Ok(rejected("Servitor refused the bound subject"));
+                }
+                let result = match (intent.intent.as_str(), payload.enrichment.as_ref()) {
+                    (READ_INTENT, Some(evidence)) => {
+                        ReadingEngine::calculate_enriched(&context, &payload.field, evidence)
+                    }
+                    (READ_INTENT, None) => ReadingEngine::calculate(&context, &payload.field),
+                    (SELECT_INTENT, Some(evidence)) => ReadingEngine::cast_enriched_with(
+                        &context,
+                        &payload.field,
+                        evidence,
+                        entropy,
+                    ),
+                    (SELECT_INTENT, None) => {
+                        ReadingEngine::cast_with(&context, &payload.field, entropy)
+                    }
+                    _ => unreachable!("the match is limited to read and select"),
+                };
+                match result {
+                    Ok(reading) => reading,
+                    Err(ReadingError::Entropy(error)) => {
+                        return Err(AppError::Intent(format!("entropy failed: {error}")));
+                    }
+                    Err(error) => {
+                        return Ok(rejected(format!("reading request is invalid: {error}")));
+                    }
+                }
+            }
+            ROLL_INTENT => {
+                let payload = match serde_json::from_slice::<RollIntentPayload>(&intent.payload) {
+                    Ok(payload) => payload,
+                    Err(error) => return Ok(rejected(format!("invalid roll payload: {error}"))),
+                };
+                if payload.schema != ROLL_SCHEMA {
+                    return Ok(rejected("roll payload schema does not match the intent"));
+                }
+                if payload.sides < 2 || payload.sides > self.intent_limits.max_die_sides {
+                    return Ok(rejected(
+                        "die sides are outside the configured intent limits",
+                    ));
+                }
+                if self
+                    .servitors
+                    .petition_write(subject, scope, "cleromancy.roll request")
+                    .is_err()
+                {
+                    return Ok(rejected("Servitor refused the bound subject"));
+                }
+                let field = die_field(payload.sides, payload.label.as_deref());
+                match ReadingEngine::cast_with(&context, &field, entropy) {
+                    Ok(reading) => reading,
+                    Err(ReadingError::Entropy(error)) => {
+                        return Err(AppError::Intent(format!("entropy failed: {error}")));
+                    }
+                    Err(error) => {
+                        return Ok(rejected(format!("roll request is invalid: {error}")));
+                    }
+                }
+            }
+            _ => return Ok(rejected("intent is not implemented")),
+        };
+        self.host.insert_reading(&context, &reading)?;
+        self.pending_notice = true;
+        Ok(IntentResult::Accepted)
+    }
+
+    pub(crate) fn take_projection_notice(&mut self) -> Option<CarrierNotice> {
+        if !std::mem::take(&mut self.pending_notice) {
+            return None;
+        }
+        let (epoch, revision) = self.host.active_revision()?;
+        Some(CarrierNotice {
+            session: self.host.session(),
+            epoch,
+            revision,
+        })
+    }
+
+    pub fn invoke(&mut self, intent: IntentInvocation) -> Result<IntentResult, AppError> {
+        self.invoke_with_entropy(intent, &mut OsEntropy)
+    }
+
     /// Mount the local endpoint through the same snapshot/resource split a
     /// remote Graphshell endpoint uses.
     pub fn mount_local(&mut self) -> Result<Vec<ResolvedPresentation>, AppError> {
         let session = self.host.session();
-        let snapshot = self.host.snapshot(self.host.local_request())?;
+        let snapshot = self
+            .host
+            .build_snapshot_with_actions(self.intents_are_bound())?;
         let resources = snapshot
             .presentation
             .offers
@@ -172,5 +368,11 @@ impl<B: Backend> CleromancyApp<B> {
             layout: Some(ProjectionLayoutView::from_scene(&mounted.scene)),
             intents: Vec::new(),
         }))
+    }
+}
+
+fn rejected(reason: impl Into<String>) -> IntentResult {
+    IntentResult::Rejected {
+        reason: reason.into(),
     }
 }

@@ -8,6 +8,7 @@ pub mod context;
 pub mod enrichment;
 pub mod field;
 pub mod host;
+pub mod intents;
 pub mod moirai;
 mod projection;
 pub mod reading;
@@ -21,12 +22,16 @@ pub use enrichment::{
 };
 pub use field::{Candidate, Field};
 pub use host::{CleromancyHost, HostError};
+pub use intents::{
+    IntentLimits, READ_INTENT, READ_SCHEMA, READ_SCOPE, ROLL_INTENT, ROLL_SCHEMA, ROLL_SCOPE,
+    ReadingIntentPayload, RollIntentPayload, SELECT_INTENT, SELECT_SCHEMA, SELECT_SCOPE,
+};
 pub use reading::{
     EXTERNAL_QUALIFICATION_ALGORITHM, EnrichmentQualification, Reading, ReadingEngine,
     ReadingError, Receipt, SelectionMode,
 };
 pub use servitor;
-pub use servitors::ServitorAccess;
+pub use servitors::{ServitorAccess, ServitorAccessError};
 
 /// Stable fixture used by the A0 executable and integration receipts.
 pub fn a0_fixture() -> (ContextSnapshot, Field) {
