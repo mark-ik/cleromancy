@@ -15,7 +15,8 @@ use thiserror::Error;
 
 use crate::enrichment::{EnrichmentError, EnrichmentReport, ExternalProjection, mount_carrier};
 use crate::intents::{
-    IntentLimits, READ_INTENT, READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA, ReadingIntentPayload,
+    COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, CompositionLayout, IntentLimits, READ_INTENT,
+    READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA, ReadingCompositionIntentPayload, ReadingIntentPayload,
     RollIntentPayload, SELECT_INTENT, SELECT_SCHEMA, THREE_CARD_SPREAD_INTENT,
     THREE_CARD_SPREAD_INTENT_SCHEMA, ThreeCardSpreadIntentPayload, die_field, scope_for,
 };
@@ -138,6 +139,115 @@ impl<B: Backend> CleromancyApp<B> {
             .ok_or_else(|| AppError::Intent("advertised context disappeared".to_string()))?;
         let scope = scope_for(&intent.intent)
             .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
+
+        if intent.intent == COMPOSE_READING_INTENT {
+            let payload =
+                match serde_json::from_slice::<ReadingCompositionIntentPayload>(&intent.payload) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        return Ok(rejected(format!("invalid composition payload: {error}")));
+                    }
+                };
+            if payload.schema != COMPOSE_READING_SCHEMA {
+                return Ok(rejected(
+                    "composition payload schema does not match the intent",
+                ));
+            }
+            if payload.field.candidates.is_empty()
+                || payload.field.candidates.len() > self.intent_limits.max_candidates
+            {
+                return Ok(rejected(
+                    "candidate count is outside the configured intent limits",
+                ));
+            }
+            if invalid_client_token(
+                payload.client_token.as_deref(),
+                self.intent_limits.max_client_token_bytes,
+            ) {
+                return Ok(rejected(
+                    "client token is outside the configured intent limits",
+                ));
+            }
+            if payload.layout == CompositionLayout::ThreeCard
+                && payload.mode != crate::SelectionMode::Cast
+            {
+                return Ok(rejected(
+                    "the three-card layout requires cast selection mode",
+                ));
+            }
+            if payload.layout == CompositionLayout::ThreeCard && payload.enrichment.is_some() {
+                return Ok(rejected("the three-card layout does not accept enrichment"));
+            }
+            if self
+                .servitors
+                .petition_write(subject, scope, "cleromancy.compose-reading request")
+                .is_err()
+            {
+                return Ok(rejected("Servitor refused the bound subject"));
+            }
+            match payload.layout {
+                CompositionLayout::Single => {
+                    let result = match (payload.mode, payload.enrichment.as_ref()) {
+                        (crate::SelectionMode::Calculated, Some(evidence)) => {
+                            ReadingEngine::calculate_enriched(&context, &payload.field, evidence)
+                        }
+                        (crate::SelectionMode::Calculated, None) => {
+                            ReadingEngine::calculate(&context, &payload.field)
+                        }
+                        (crate::SelectionMode::Cast, Some(evidence)) => {
+                            ReadingEngine::cast_enriched_with(
+                                &context,
+                                &payload.field,
+                                evidence,
+                                entropy,
+                            )
+                        }
+                        (crate::SelectionMode::Cast, None) => {
+                            ReadingEngine::cast_with(&context, &payload.field, entropy)
+                        }
+                    };
+                    let reading = match result {
+                        Ok(reading) => reading,
+                        Err(ReadingError::Entropy(error)) => {
+                            return Err(AppError::Intent(format!("entropy failed: {error}")));
+                        }
+                        Err(error) => {
+                            return Ok(rejected(format!(
+                                "composition request is invalid: {error}"
+                            )));
+                        }
+                    };
+                    self.host.record_reading_session_with_entropy(
+                        &context,
+                        &payload.field,
+                        &reading,
+                        payload.client_token,
+                        entropy,
+                    )?;
+                }
+                CompositionLayout::ThreeCard => {
+                    match self.host.record_three_card_spread_with_entropy(
+                        &context,
+                        &payload.field,
+                        payload.client_token,
+                        entropy,
+                    ) {
+                        Ok(_) => {}
+                        Err(HostError::Reading(ReadingError::Entropy(error))) => {
+                            return Err(AppError::Intent(format!("entropy failed: {error}")));
+                        }
+                        Err(HostError::Reading(error)) => {
+                            return Ok(rejected(format!(
+                                "composition request is invalid: {error}"
+                            )));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+            self.pending_notice = true;
+            return Ok(IntentResult::Accepted);
+        }
 
         if intent.intent == THREE_CARD_SPREAD_INTENT {
             let payload =

@@ -245,6 +245,26 @@ cargo test --test a9
 See `design_docs/2026-08-04_a9_three_card_intent.md` for the contract and
 stop rule.
 
+## A10
+
+A10 adds `cleromancy.compose-reading`, a single typed action for a headed host
+to choose an explicit field, a `single` or `three_card` layout, and
+`calculated` or `cast` mode. A single composition uses the existing reading
+engine; a three-card cast uses the authored A8 spread. The exact field and
+client-correlated session remain graph truth, while impossible combinations are
+rejected before mutation.
+
+The older narrow actions remain available. Mere owns the future field editor:
+this contract gives it a stable payload and resnapshot path without turning the
+generic receipt renderer into an editor.
+
+```powershell
+cargo test --test a10
+```
+
+See `design_docs/2026-08-04_a10_generic_composer.md` for the dispatch table and
+ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.

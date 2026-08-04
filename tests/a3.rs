@@ -3,8 +3,8 @@
 
 use cleromancy::servitor::{Cap, Grant, Mode, Subject};
 use cleromancy::{
-    CleromancyApp, CleromancyHost, READ_INTENT, READ_SCOPE, ROLL_INTENT, Reading,
-    ReadingIntentPayload, ReadingSession, RollIntentPayload, SELECT_INTENT,
+    COMPOSE_READING_INTENT, CleromancyApp, CleromancyHost, READ_INTENT, READ_SCOPE, ROLL_INTENT,
+    Reading, ReadingIntentPayload, ReadingSession, RollIntentPayload, SELECT_INTENT,
     THREE_CARD_SPREAD_INTENT, a0_fixture,
 };
 use graphshell_local::LocalCarrier;
@@ -48,7 +48,8 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
             READ_INTENT,
             ROLL_INTENT,
             SELECT_INTENT,
-            THREE_CARD_SPREAD_INTENT
+            THREE_CARD_SPREAD_INTENT,
+            COMPOSE_READING_INTENT
         ]
         .into()
     );
