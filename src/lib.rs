@@ -4,6 +4,7 @@
 //! Context-qualified deterministic and cleromantic readings over a Mere graph.
 
 pub mod app;
+pub mod composer;
 pub mod context;
 pub mod enrichment;
 pub mod field;
@@ -20,6 +21,7 @@ pub mod sync;
 pub mod tarot;
 
 pub use app::{AppError, CleromancyApp};
+pub use composer::{ComposerError, FIELD_COMPOSER_SCHEMA, FieldComposer};
 pub use context::ContextSnapshot;
 pub use enrichment::{
     EnrichmentMatch, EnrichmentReport, EnrichmentSource, EnrichmentValue, ExternalProjection,

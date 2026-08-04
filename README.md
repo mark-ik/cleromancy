@@ -282,6 +282,20 @@ cargo test --test a10
 See `design_docs/2026-08-04_a11_field_selection.md` for the resolution and
 ownership boundary.
 
+## A12
+
+A12 adds `FieldComposer`, a serializable draft for authoring generic candidate
+fields. It validates only local structure, then emits the same exact `Field`
+used by the reading engine and composition intent. It does not generate
+interpretations or decide whether a declared rule is executable.
+
+```powershell
+cargo test --test a12
+```
+
+See `design_docs/2026-08-04_a12_field_composer.md` for the validation and
+ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.
