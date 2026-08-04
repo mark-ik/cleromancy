@@ -4,7 +4,8 @@
 use cleromancy::servitor::{Cap, Grant, Mode, Subject};
 use cleromancy::{
     CleromancyApp, CleromancyHost, READ_INTENT, READ_SCOPE, ROLL_INTENT, Reading,
-    ReadingIntentPayload, ReadingSession, RollIntentPayload, SELECT_INTENT, a0_fixture,
+    ReadingIntentPayload, ReadingSession, RollIntentPayload, SELECT_INTENT,
+    THREE_CARD_SPREAD_INTENT, a0_fixture,
 };
 use graphshell_local::LocalCarrier;
 use graphshell_protocol::{
@@ -41,7 +42,16 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
         .flat_map(|offer| offer.semantics.actions.iter())
         .map(|action| action.intent.0.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(actions, [READ_INTENT, ROLL_INTENT, SELECT_INTENT].into());
+    assert_eq!(
+        actions,
+        [
+            READ_INTENT,
+            ROLL_INTENT,
+            SELECT_INTENT,
+            THREE_CARD_SPREAD_INTENT
+        ]
+        .into()
+    );
 
     let read_intent = invocation(
         &first,

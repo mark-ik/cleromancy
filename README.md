@@ -225,6 +225,26 @@ cargo run --bin a8_three_card_receipt -- `
 See `design_docs/2026-08-04_a8_three_card_spread.md` for the fixed layout,
 sync boundary, and stop rule.
 
+## A9
+
+A9 exposes the fixed spread through the authenticated Graphshell intent seam.
+Context cards now advertise `cleromancy.three-card-spread` with a bounded field
+payload and optional client token. The containing host must bind a subject and
+the dedicated Servitor write scope. Accepted calls append the three secure
+casts, session, and authored spread, then emit the ordinary revision notice.
+
+This proves the wire contract without turning Cleromancy's generic receipt
+view into a pretend editor. The headed form and input ownership remain a Mere
+host concern.
+
+```powershell
+cargo test --test a3
+cargo test --test a9
+```
+
+See `design_docs/2026-08-04_a9_three_card_intent.md` for the contract and
+stop rule.
+
 ## License
 
 MIT OR Apache-2.0.

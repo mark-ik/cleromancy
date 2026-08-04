@@ -64,7 +64,8 @@ impl<B: Backend> IntentSink for CleromancyHost<B> {
             return Err(HostError::WrongSession);
         }
         Ok(IntentResult::Rejected {
-            reason: "A0 exposes readings as a read-only Graphshell projection".to_string(),
+            reason: "The raw host projection is read-only; bound intents require CleromancyApp"
+                .to_string(),
         })
     }
 }

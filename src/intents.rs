@@ -9,12 +9,15 @@ use crate::{Candidate, Field, SealedEnrichment, UNIFORM_DIE_RULE};
 pub const READ_INTENT: &str = "cleromancy.read";
 pub const SELECT_INTENT: &str = "cleromancy.select";
 pub const ROLL_INTENT: &str = "cleromancy.roll";
+pub const THREE_CARD_SPREAD_INTENT: &str = "cleromancy.three-card-spread";
 pub const READ_SCHEMA: &str = "cleromancy.intent.read/v1";
 pub const SELECT_SCHEMA: &str = "cleromancy.intent.select/v1";
 pub const ROLL_SCHEMA: &str = "cleromancy.intent.roll/v1";
+pub const THREE_CARD_SPREAD_INTENT_SCHEMA: &str = "cleromancy.intent.three-card-spread/v1";
 pub const READ_SCOPE: &str = "cleromancy/intents/read";
 pub const SELECT_SCOPE: &str = "cleromancy/intents/select";
 pub const ROLL_SCOPE: &str = "cleromancy/intents/roll";
+pub const THREE_CARD_SPREAD_SCOPE: &str = "cleromancy/intents/three-card-spread";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IntentLimits {
@@ -113,6 +116,30 @@ impl RollIntentPayload {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreeCardSpreadIntentPayload {
+    pub schema: String,
+    pub field: Field,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
+}
+
+impl ThreeCardSpreadIntentPayload {
+    pub fn new(field: Field) -> Self {
+        Self {
+            schema: THREE_CARD_SPREAD_INTENT_SCHEMA.to_string(),
+            field,
+            client_token: None,
+        }
+    }
+
+    pub fn with_client_token(mut self, client_token: impl Into<String>) -> Self {
+        self.client_token = Some(client_token.into());
+        self
+    }
+}
+
 pub fn advertised_actions() -> Vec<AdvertisedAction> {
     vec![
         AdvertisedAction {
@@ -139,6 +166,15 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
             payload_schema: ROLL_SCHEMA.to_string(),
             effect: IntentEffect::DomainTruth,
         },
+        AdvertisedAction {
+            intent: IntentReference(THREE_CARD_SPREAD_INTENT.to_string()),
+            label: "Cast a three-card spread".to_string(),
+            explanation:
+                "Cast foundation, tension, and next step, then append their replayable graph frame."
+                    .to_string(),
+            payload_schema: THREE_CARD_SPREAD_INTENT_SCHEMA.to_string(),
+            effect: IntentEffect::DomainTruth,
+        },
     ]
 }
 
@@ -147,6 +183,7 @@ pub(crate) fn scope_for(intent: &str) -> Option<&'static str> {
         READ_INTENT => Some(READ_SCOPE),
         SELECT_INTENT => Some(SELECT_SCOPE),
         ROLL_INTENT => Some(ROLL_SCOPE),
+        THREE_CARD_SPREAD_INTENT => Some(THREE_CARD_SPREAD_SCOPE),
         _ => None,
     }
 }

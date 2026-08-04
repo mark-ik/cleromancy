@@ -16,7 +16,8 @@ use thiserror::Error;
 use crate::enrichment::{EnrichmentError, EnrichmentReport, ExternalProjection, mount_carrier};
 use crate::intents::{
     IntentLimits, READ_INTENT, READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA, ReadingIntentPayload,
-    RollIntentPayload, SELECT_INTENT, SELECT_SCHEMA, die_field, scope_for,
+    RollIntentPayload, SELECT_INTENT, SELECT_SCHEMA, THREE_CARD_SPREAD_INTENT,
+    THREE_CARD_SPREAD_INTENT_SCHEMA, ThreeCardSpreadIntentPayload, die_field, scope_for,
 };
 use crate::moirai::clotho::{EntropySource, OsEntropy};
 use crate::{CleromancyHost, HostError, ReadingEngine, ReadingError, ServitorAccess};
@@ -137,6 +138,57 @@ impl<B: Backend> CleromancyApp<B> {
             .ok_or_else(|| AppError::Intent("advertised context disappeared".to_string()))?;
         let scope = scope_for(&intent.intent)
             .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
+
+        if intent.intent == THREE_CARD_SPREAD_INTENT {
+            let payload =
+                match serde_json::from_slice::<ThreeCardSpreadIntentPayload>(&intent.payload) {
+                    Ok(payload) => payload,
+                    Err(error) => return Ok(rejected(format!("invalid spread payload: {error}"))),
+                };
+            if payload.schema != THREE_CARD_SPREAD_INTENT_SCHEMA {
+                return Ok(rejected("spread payload schema does not match the intent"));
+            }
+            if payload.field.candidates.is_empty()
+                || payload.field.candidates.len() > self.intent_limits.max_candidates
+            {
+                return Ok(rejected(
+                    "candidate count is outside the configured intent limits",
+                ));
+            }
+            if invalid_client_token(
+                payload.client_token.as_deref(),
+                self.intent_limits.max_client_token_bytes,
+            ) {
+                return Ok(rejected(
+                    "client token is outside the configured intent limits",
+                ));
+            }
+            if self
+                .servitors
+                .petition_write(subject, scope, "cleromancy.three-card-spread request")
+                .is_err()
+            {
+                return Ok(rejected("Servitor refused the bound subject"));
+            }
+            match self.host.record_three_card_spread_with_entropy(
+                &context,
+                &payload.field,
+                payload.client_token,
+                entropy,
+            ) {
+                Ok(_) => {
+                    self.pending_notice = true;
+                    return Ok(IntentResult::Accepted);
+                }
+                Err(HostError::Reading(ReadingError::Entropy(error))) => {
+                    return Err(AppError::Intent(format!("entropy failed: {error}")));
+                }
+                Err(HostError::Reading(error)) => {
+                    return Ok(rejected(format!("spread request is invalid: {error}")));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
 
         let (field, reading, client_token) = match intent.intent.as_str() {
             READ_INTENT | SELECT_INTENT => {
