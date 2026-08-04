@@ -15,7 +15,7 @@ pub const READ_SCHEMA: &str = "cleromancy.intent.read/v1";
 pub const SELECT_SCHEMA: &str = "cleromancy.intent.select/v1";
 pub const ROLL_SCHEMA: &str = "cleromancy.intent.roll/v1";
 pub const THREE_CARD_SPREAD_INTENT_SCHEMA: &str = "cleromancy.intent.three-card-spread/v1";
-pub const COMPOSE_READING_SCHEMA: &str = "cleromancy.intent.compose-reading/v1";
+pub const COMPOSE_READING_SCHEMA: &str = "cleromancy.intent.compose-reading/v2";
 pub const READ_SCOPE: &str = "cleromancy/intents/read";
 pub const SELECT_SCOPE: &str = "cleromancy/intents/select";
 pub const ROLL_SCOPE: &str = "cleromancy/intents/roll";
@@ -143,10 +143,29 @@ pub enum CompositionLayout {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FieldSelection {
+    Inline { field: Field },
+    Stored { digest: String },
+}
+
+impl FieldSelection {
+    pub fn inline(field: Field) -> Self {
+        Self::Inline { field }
+    }
+
+    pub fn stored(digest: impl Into<String>) -> Self {
+        Self::Stored {
+            digest: digest.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadingCompositionIntentPayload {
     pub schema: String,
-    pub field: Field,
+    pub field: FieldSelection,
     pub layout: CompositionLayout,
     pub mode: SelectionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,7 +178,22 @@ impl ReadingCompositionIntentPayload {
     pub fn new(field: Field, layout: CompositionLayout, mode: SelectionMode) -> Self {
         Self {
             schema: COMPOSE_READING_SCHEMA.to_string(),
-            field,
+            field: FieldSelection::inline(field),
+            layout,
+            mode,
+            enrichment: None,
+            client_token: None,
+        }
+    }
+
+    pub fn stored(
+        digest: impl Into<String>,
+        layout: CompositionLayout,
+        mode: SelectionMode,
+    ) -> Self {
+        Self {
+            schema: COMPOSE_READING_SCHEMA.to_string(),
+            field: FieldSelection::stored(digest),
             layout,
             mode,
             enrichment: None,

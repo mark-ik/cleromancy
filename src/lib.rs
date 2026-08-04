@@ -32,10 +32,10 @@ pub use field::{
 pub use host::{CleromancyHost, HostError};
 pub use intents::{
     COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, COMPOSE_READING_SCOPE, CompositionLayout,
-    IntentLimits, READ_INTENT, READ_SCHEMA, READ_SCOPE, ROLL_INTENT, ROLL_SCHEMA, ROLL_SCOPE,
-    ReadingCompositionIntentPayload, ReadingIntentPayload, RollIntentPayload, SELECT_INTENT,
-    SELECT_SCHEMA, SELECT_SCOPE, THREE_CARD_SPREAD_INTENT, THREE_CARD_SPREAD_INTENT_SCHEMA,
-    THREE_CARD_SPREAD_SCOPE, ThreeCardSpreadIntentPayload,
+    FieldSelection, IntentLimits, READ_INTENT, READ_SCHEMA, READ_SCOPE, ROLL_INTENT, ROLL_SCHEMA,
+    ROLL_SCOPE, ReadingCompositionIntentPayload, ReadingIntentPayload, RollIntentPayload,
+    SELECT_INTENT, SELECT_SCHEMA, SELECT_SCOPE, THREE_CARD_SPREAD_INTENT,
+    THREE_CARD_SPREAD_INTENT_SCHEMA, THREE_CARD_SPREAD_SCOPE, ThreeCardSpreadIntentPayload,
 };
 pub use reading::{
     EXTERNAL_QUALIFICATION_ALGORITHM, EnrichmentQualification, Reading, ReadingEngine,

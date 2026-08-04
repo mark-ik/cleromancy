@@ -751,6 +751,37 @@ impl<B: Backend> CleromancyHost<B> {
         serde_json::from_value(self.facet_value(key, CONTEXT_FACET)?.clone()).ok()
     }
 
+    pub(crate) fn field_for_digest(&self, digest: &str) -> Result<Field, HostError> {
+        let address = format!("cleromancy://field/{digest}");
+        let key = self
+            .graph
+            .get_node_by_url(&address)
+            .map(|(key, _)| key)
+            .ok_or_else(|| HostError::MissingReadingDependency {
+                kind: "field",
+                digest: digest.to_string(),
+            })?;
+        let value = self.facet_value(key, FIELD_FACET).ok_or_else(|| {
+            HostError::MissingReadingDependency {
+                kind: "field",
+                digest: digest.to_string(),
+            }
+        })?;
+        let field = serde_json::from_value::<Field>(value.clone()).map_err(|error| {
+            HostError::InvalidStoredFacet {
+                facet: FIELD_FACET,
+                reason: error.to_string(),
+            }
+        })?;
+        if field.digest() != digest {
+            return Err(HostError::InvalidStoredFacet {
+                facet: FIELD_FACET,
+                reason: "field digest does not match its canonical address".to_string(),
+            });
+        }
+        Ok(field)
+    }
+
     pub(crate) fn intent_was_advertised(&self, instance: InstanceId, intent: &str) -> bool {
         self.context_for_instance(instance).is_some() && crate::intents::scope_for(intent).is_some()
     }
@@ -1155,6 +1186,10 @@ impl<B: Backend> CleromancyHost<B> {
             && let Ok(field) = serde_json::from_value::<Field>(value.clone())
         {
             values.extend([
+                CardValueV1 {
+                    label: "Digest".to_string(),
+                    value: field.digest(),
+                },
                 CardValueV1 {
                     label: "System".to_string(),
                     value: field.system,

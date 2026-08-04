@@ -6,7 +6,7 @@ use cleromancy::{
 use graphshell_local::LocalCarrier;
 use graphshell_protocol::{
     Carrier, CarrierRequestBody, CarrierResponseBody, IntentInvocation, IntentResult,
-    ProjectionSnapshot,
+    PortableCardV1, ProjectionSnapshot, ResourceRequest,
 };
 use muniment::MemoryBackend;
 
@@ -131,6 +131,93 @@ fn generic_composer_rejects_a_deterministic_three_card_request() {
     assert_eq!(sessions(carrier.endpoint()).len(), 0);
 }
 
+#[test]
+fn generic_composer_can_select_a_graph_resident_field() {
+    let (context, field) = a0_fixture();
+    let field_digest = field.digest();
+    let mut host = CleromancyHost::empty(MemoryBackend::new());
+    host.insert_context(&context).unwrap();
+    host.insert_field(&field).unwrap();
+    let subject = Subject::new([0x12; 32]);
+    let mut app = CleromancyApp::new(host);
+    app.bind_intent_subject(subject);
+    app.servitors_mut()
+        .grant(Grant::new(
+            subject,
+            Cap::scope("cleromancy/intents").unwrap(),
+            Mode::Write,
+        ))
+        .unwrap();
+    let mut carrier = LocalCarrier::new(app, |_, _| Err("resume is not used".to_string()));
+
+    let request = discover_request(&mut carrier);
+    let first = snapshot(&mut carrier, &request);
+    assert!(cards(&mut carrier, &first).iter().any(|card| {
+        card.values
+            .iter()
+            .any(|value| value.label == "Digest" && value.value == field_digest)
+    }));
+    assert_eq!(
+        request_intent(
+            &mut carrier,
+            invocation(
+                &first,
+                context_target(&first),
+                &ReadingCompositionIntentPayload::stored(
+                    field_digest,
+                    CompositionLayout::Single,
+                    SelectionMode::Calculated,
+                )
+                .with_client_token("a10-stored"),
+            ),
+        ),
+        IntentResult::Accepted
+    );
+    assert!(carrier.take_notice().is_some());
+    let sessions = sessions(carrier.endpoint());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].client_token.as_deref(), Some("a10-stored"));
+    assert_eq!(sessions[0].field_digest, field.digest());
+}
+
+#[test]
+fn generic_composer_rejects_a_missing_graph_field() {
+    let (context, field) = a0_fixture();
+    let mut host = CleromancyHost::empty(MemoryBackend::new());
+    host.insert_context(&context).unwrap();
+    let subject = Subject::new([0x13; 32]);
+    let mut app = CleromancyApp::new(host);
+    app.bind_intent_subject(subject);
+    app.servitors_mut()
+        .grant(Grant::new(
+            subject,
+            Cap::scope("cleromancy/intents").unwrap(),
+            Mode::Write,
+        ))
+        .unwrap();
+    let mut carrier = LocalCarrier::new(app, |_, _| Err("resume is not used".to_string()));
+
+    let request = discover_request(&mut carrier);
+    let first = snapshot(&mut carrier, &request);
+    assert!(matches!(
+        request_intent(
+            &mut carrier,
+            invocation(
+                &first,
+                context_target(&first),
+                &ReadingCompositionIntentPayload::stored(
+                    field.digest(),
+                    CompositionLayout::Single,
+                    SelectionMode::Calculated,
+                ),
+            ),
+        ),
+        IntentResult::Rejected { reason } if reason.contains("not found")
+    ));
+    assert!(carrier.take_notice().is_none());
+    assert_eq!(sessions(carrier.endpoint()).len(), 0);
+}
+
 fn discover_request(carrier: &mut impl Carrier) -> graphshell_protocol::ProjectionRequest {
     match carrier.request(CarrierRequestBody::Discover).unwrap() {
         CarrierResponseBody::Descriptor(descriptor) => descriptor.projections[0].request.clone(),
@@ -190,6 +277,33 @@ fn request_intent(carrier: &mut impl Carrier, intent: IntentInvocation) -> Inten
         CarrierResponseBody::Intent(result) => result,
         response => panic!("unexpected intent response: {response:?}"),
     }
+}
+
+fn cards(carrier: &mut impl Carrier, snapshot: &ProjectionSnapshot) -> Vec<PortableCardV1> {
+    snapshot
+        .presentation
+        .bindings
+        .iter()
+        .flat_map(|binding| {
+            snapshot
+                .presentation
+                .offers_for(binding.instance)
+                .into_iter()
+                .flatten()
+        })
+        .map(|offer| {
+            let response = carrier
+                .request(CarrierRequestBody::Resource(ResourceRequest {
+                    session: snapshot.session.clone(),
+                    resource: offer.resource,
+                }))
+                .unwrap();
+            let CarrierResponseBody::Resource(response) = response else {
+                panic!("expected a portable-card resource");
+            };
+            serde_json::from_slice(&response.bytes).unwrap()
+        })
+        .collect()
 }
 
 fn domain_values<T: serde::de::DeserializeOwned>(

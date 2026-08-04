@@ -15,10 +15,11 @@ use thiserror::Error;
 
 use crate::enrichment::{EnrichmentError, EnrichmentReport, ExternalProjection, mount_carrier};
 use crate::intents::{
-    COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, CompositionLayout, IntentLimits, READ_INTENT,
-    READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA, ReadingCompositionIntentPayload, ReadingIntentPayload,
-    RollIntentPayload, SELECT_INTENT, SELECT_SCHEMA, THREE_CARD_SPREAD_INTENT,
-    THREE_CARD_SPREAD_INTENT_SCHEMA, ThreeCardSpreadIntentPayload, die_field, scope_for,
+    COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, CompositionLayout, FieldSelection,
+    IntentLimits, READ_INTENT, READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA,
+    ReadingCompositionIntentPayload, ReadingIntentPayload, RollIntentPayload, SELECT_INTENT,
+    SELECT_SCHEMA, THREE_CARD_SPREAD_INTENT, THREE_CARD_SPREAD_INTENT_SCHEMA,
+    ThreeCardSpreadIntentPayload, die_field, scope_for,
 };
 use crate::moirai::clotho::{EntropySource, OsEntropy};
 use crate::{CleromancyHost, HostError, ReadingEngine, ReadingError, ServitorAccess};
@@ -153,29 +154,52 @@ impl<B: Backend> CleromancyApp<B> {
                     "composition payload schema does not match the intent",
                 ));
             }
-            if payload.field.candidates.is_empty()
-                || payload.field.candidates.len() > self.intent_limits.max_candidates
+            let ReadingCompositionIntentPayload {
+                field: selection,
+                layout,
+                mode,
+                enrichment,
+                client_token,
+                ..
+            } = payload;
+            let field = match selection {
+                FieldSelection::Inline { field } => field,
+                FieldSelection::Stored { digest } => {
+                    if digest.trim().is_empty() || digest.len() > 128 {
+                        return Ok(rejected(
+                            "stored field digest is outside the configured intent limits",
+                        ));
+                    }
+                    match self.host.field_for_digest(&digest) {
+                        Ok(field) => field,
+                        Err(HostError::MissingReadingDependency { .. }) => {
+                            return Ok(rejected("stored field was not found in graph truth"));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            };
+            if field.candidates.is_empty()
+                || field.candidates.len() > self.intent_limits.max_candidates
             {
                 return Ok(rejected(
                     "candidate count is outside the configured intent limits",
                 ));
             }
             if invalid_client_token(
-                payload.client_token.as_deref(),
+                client_token.as_deref(),
                 self.intent_limits.max_client_token_bytes,
             ) {
                 return Ok(rejected(
                     "client token is outside the configured intent limits",
                 ));
             }
-            if payload.layout == CompositionLayout::ThreeCard
-                && payload.mode != crate::SelectionMode::Cast
-            {
+            if layout == CompositionLayout::ThreeCard && mode != crate::SelectionMode::Cast {
                 return Ok(rejected(
                     "the three-card layout requires cast selection mode",
                 ));
             }
-            if payload.layout == CompositionLayout::ThreeCard && payload.enrichment.is_some() {
+            if layout == CompositionLayout::ThreeCard && enrichment.is_some() {
                 return Ok(rejected("the three-card layout does not accept enrichment"));
             }
             if self
@@ -185,25 +209,20 @@ impl<B: Backend> CleromancyApp<B> {
             {
                 return Ok(rejected("Servitor refused the bound subject"));
             }
-            match payload.layout {
+            match layout {
                 CompositionLayout::Single => {
-                    let result = match (payload.mode, payload.enrichment.as_ref()) {
+                    let result = match (mode, enrichment.as_ref()) {
                         (crate::SelectionMode::Calculated, Some(evidence)) => {
-                            ReadingEngine::calculate_enriched(&context, &payload.field, evidence)
+                            ReadingEngine::calculate_enriched(&context, &field, evidence)
                         }
                         (crate::SelectionMode::Calculated, None) => {
-                            ReadingEngine::calculate(&context, &payload.field)
+                            ReadingEngine::calculate(&context, &field)
                         }
                         (crate::SelectionMode::Cast, Some(evidence)) => {
-                            ReadingEngine::cast_enriched_with(
-                                &context,
-                                &payload.field,
-                                evidence,
-                                entropy,
-                            )
+                            ReadingEngine::cast_enriched_with(&context, &field, evidence, entropy)
                         }
                         (crate::SelectionMode::Cast, None) => {
-                            ReadingEngine::cast_with(&context, &payload.field, entropy)
+                            ReadingEngine::cast_with(&context, &field, entropy)
                         }
                     };
                     let reading = match result {
@@ -219,17 +238,17 @@ impl<B: Backend> CleromancyApp<B> {
                     };
                     self.host.record_reading_session_with_entropy(
                         &context,
-                        &payload.field,
+                        &field,
                         &reading,
-                        payload.client_token,
+                        client_token,
                         entropy,
                     )?;
                 }
                 CompositionLayout::ThreeCard => {
                     match self.host.record_three_card_spread_with_entropy(
                         &context,
-                        &payload.field,
-                        payload.client_token,
+                        &field,
+                        client_token,
                         entropy,
                     ) {
                         Ok(_) => {}

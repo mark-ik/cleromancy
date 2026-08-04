@@ -265,6 +265,23 @@ cargo test --test a10
 See `design_docs/2026-08-04_a10_generic_composer.md` for the dispatch table and
 ownership boundary.
 
+## A11
+
+A11 lets the generic composer select an existing graph-resident field by its
+canonical digest. `cleromancy.intent.compose-reading/v2` accepts either an
+inline field or a tagged stored-field reference. Cleromancy resolves and
+verifies the stored facet before authorization and mutation; a missing field is
+rejected without a notice. Field cards disclose the digest so Mere can build a
+selection control without copying candidate interpretations into a generic
+form.
+
+```powershell
+cargo test --test a10
+```
+
+See `design_docs/2026-08-04_a11_field_selection.md` for the resolution and
+ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.
