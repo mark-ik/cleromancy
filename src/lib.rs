@@ -24,8 +24,8 @@ pub mod tarot;
 pub use app::{AppError, CleromancyApp};
 pub use astrology::{
     ASTROLOGY_CHART_SCHEMA, ASTROLOGY_FACTS_ALGORITHM, ASTROLOGY_FACTS_SCHEMA, AspectKind,
-    AstrologyAspect, AstrologyChart, AstrologyError, AstrologyFacts, AstrologyMoment,
-    AstrologyPlacement, AstrologyPosition, ZodiacSign,
+    AstrologyAdapter, AstrologyAspect, AstrologyChart, AstrologyError, AstrologyFacts,
+    AstrologyMoment, AstrologyPlacement, AstrologyPosition, ZodiacSign, calculate_with_adapter,
 };
 pub use composer::{ComposerError, FIELD_COMPOSER_SCHEMA, FieldComposer};
 pub use context::ContextSnapshot;
@@ -37,7 +37,7 @@ pub use field::{
     CONTEXTUAL_WEIGHT_RULE, Candidate, EXTERNAL_TERM_WEIGHT_RULE, Field, UNIFORM_DIE_RULE,
     UNIFORM_RULE,
 };
-pub use host::{CleromancyHost, HostError};
+pub use host::{ASTROLOGY_CHART_FACET, ASTROLOGY_FACTS_FACET, CleromancyHost, HostError};
 pub use intents::{
     COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, COMPOSE_READING_SCOPE, CompositionLayout,
     FieldSelection, IntentLimits, READ_INTENT, READ_SCHEMA, READ_SCOPE, ROLL_INTENT, ROLL_SCHEMA,

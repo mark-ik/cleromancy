@@ -316,6 +316,24 @@ cargo test --test a13
 See `design_docs/2026-08-04_a13_astrology_facts.md` for the source and
 interpretation boundary.
 
+## A14
+
+A14 defines `AstrologyAdapter`, which receives an explicit moment and returns a
+source-qualified chart. The host now stores the chart and its derived facts as
+separate digest-addressed graph nodes, links facts to their chart, and exposes
+both through ordinary portable cards. Replay recomputes facts from stored
+positions and the declared orb without needing the original adapter.
+
+The concrete ephemeris, personal-sync selection, chart UI, houses, and
+interpretation catalog remain open decisions.
+
+```powershell
+cargo test --test a14
+```
+
+See `design_docs/2026-08-04_a14_astrology_adapter_graph.md` for the adapter
+and graph ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.

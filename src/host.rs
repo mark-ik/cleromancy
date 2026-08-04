@@ -31,8 +31,9 @@ use thiserror::Error;
 
 use crate::moirai::clotho::EntropySource;
 use crate::{
-    ContextSnapshot, Field, Reading, ReadingEngine, ReadingError, ReadingSession, Reflection,
-    SessionError, SpreadError, ThreeCardPosition, ThreeCardRelationKind, ThreeCardSpread,
+    AstrologyChart, AstrologyError, AstrologyFacts, ContextSnapshot, Field, Reading, ReadingEngine,
+    ReadingError, ReadingSession, Reflection, SessionError, SpreadError, ThreeCardPosition,
+    ThreeCardRelationKind, ThreeCardSpread,
 };
 
 pub const HOST_SLOT: &str = "cleromancy/mere-host/v1";
@@ -43,6 +44,8 @@ pub const READING_FACET: &str = "cleromancy.reading/v1";
 pub const SESSION_FACET: &str = "cleromancy.reading-session/v1";
 pub const REFLECTION_FACET: &str = "cleromancy.reflection/v1";
 pub const THREE_CARD_SPREAD_FACET: &str = "cleromancy.three-card-spread/v1";
+pub const ASTROLOGY_CHART_FACET: &str = "cleromancy.astrology-chart/v1";
+pub const ASTROLOGY_FACTS_FACET: &str = "cleromancy.astrology-facts/v1";
 
 #[derive(Debug, Error)]
 pub enum HostError {
@@ -68,6 +71,8 @@ pub enum HostError {
     Session(#[from] SessionError),
     #[error(transparent)]
     Spread(#[from] SpreadError),
+    #[error(transparent)]
+    Astrology(#[from] AstrologyError),
     #[error(transparent)]
     Reading(#[from] ReadingError),
 }
@@ -206,6 +211,93 @@ impl<B: Backend> CleromancyHost<B> {
         let key = self.upsert_node(&address, &field.system, ["field", field.system.as_str()]);
         self.set_facet(key, FIELD_FACET, serde_json::to_value(field).unwrap())?;
         Ok(key)
+    }
+
+    /// Store an adapter-produced chart and its structured facts as separate
+    /// graph truth. The facts node is explicitly generated from the chart and
+    /// remains bound to its chart digest for replay.
+    pub fn insert_astrology_chart(
+        &mut self,
+        chart: &AstrologyChart,
+        orb_millidegrees: u32,
+    ) -> Result<(NodeKey, NodeKey), HostError> {
+        chart.validate()?;
+        let facts = chart.facts(orb_millidegrees)?;
+        let chart_digest = chart.digest();
+        let chart_key = self.upsert_node(
+            &format!("cleromancy://astrology/chart/{chart_digest}"),
+            &format!("Astrology chart ({})", chart.engine),
+            ["astrology", "chart", chart.engine.as_str()],
+        );
+        self.set_facet(
+            chart_key,
+            ASTROLOGY_CHART_FACET,
+            serde_json::to_value(chart).unwrap(),
+        )?;
+
+        let facts_key = self.upsert_node(
+            &format!("cleromancy://astrology/facts/{}", facts.digest()),
+            &format!("Astrology facts ({})", chart.moment.instant_utc),
+            ["astrology", "facts"],
+        );
+        self.set_facet(
+            facts_key,
+            ASTROLOGY_FACTS_FACET,
+            serde_json::to_value(&facts).unwrap(),
+        )?;
+        assert_relation(
+            &mut self.graph,
+            facts_key,
+            chart_key,
+            EdgeAssertion::Provenance {
+                sub_kind: ProvenanceSubKind::GeneratedFrom,
+            },
+        );
+        self.changed();
+        Ok((chart_key, facts_key))
+    }
+
+    /// Resolve and verify a graph-resident astrology facts node without
+    /// requiring the original adapter to remain installed.
+    pub fn replay_astrology_facts(
+        &self,
+        facts: &AstrologyFacts,
+    ) -> Result<AstrologyFacts, HostError> {
+        let chart = self.astrology_chart_for_digest(&facts.chart_digest)?;
+        facts.verify(&chart)?;
+        Ok(chart.facts(facts.orb_millidegrees)?)
+    }
+
+    pub fn astrology_chart_for_digest(&self, digest: &str) -> Result<AstrologyChart, HostError> {
+        let chart: AstrologyChart = self.stored_facet(
+            &format!("cleromancy://astrology/chart/{digest}"),
+            ASTROLOGY_CHART_FACET,
+            "astrology chart",
+            digest,
+        )?;
+        if chart.digest() != digest {
+            return Err(HostError::InvalidStoredFacet {
+                facet: ASTROLOGY_CHART_FACET,
+                reason: "chart digest does not match its canonical address".to_string(),
+            });
+        }
+        Ok(chart)
+    }
+
+    pub fn astrology_facts_for_digest(&self, digest: &str) -> Result<AstrologyFacts, HostError> {
+        let facts: AstrologyFacts = self.stored_facet(
+            &format!("cleromancy://astrology/facts/{digest}"),
+            ASTROLOGY_FACTS_FACET,
+            "astrology facts",
+            digest,
+        )?;
+        if facts.digest() != digest {
+            return Err(HostError::InvalidStoredFacet {
+                facet: ASTROLOGY_FACTS_FACET,
+                reason: "facts digest does not match its canonical address".to_string(),
+            });
+        }
+        Ok(facts)
     }
 
     pub fn insert_reading(
@@ -1180,6 +1272,105 @@ impl<B: Backend> CleromancyHost<B> {
                 CardValueV1 {
                     label: "Reflection".to_string(),
                     value: reflection.body,
+                },
+            ]);
+        } else if let Some(value) = self.facet_value(key, ASTROLOGY_CHART_FACET)
+            && let Ok(chart) = serde_json::from_value::<AstrologyChart>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "Digest".to_string(),
+                    value: chart.digest(),
+                },
+                CardValueV1 {
+                    label: "Algorithm".to_string(),
+                    value: chart.algorithm,
+                },
+                CardValueV1 {
+                    label: "Engine".to_string(),
+                    value: chart.engine,
+                },
+                CardValueV1 {
+                    label: "Ephemeris".to_string(),
+                    value: chart.ephemeris,
+                },
+                CardValueV1 {
+                    label: "Moment".to_string(),
+                    value: chart.moment.instant_utc,
+                },
+                CardValueV1 {
+                    label: "Positions".to_string(),
+                    value: chart
+                        .positions
+                        .iter()
+                        .map(|position| {
+                            format!(
+                                "{}: {} mdeg longitude, {} mdeg latitude{}",
+                                position.body,
+                                position.longitude_millidegrees,
+                                position.latitude_millidegrees,
+                                position
+                                    .retrograde
+                                    .map_or_else(String::new, |value| format!(
+                                        ", retrograde={value}"
+                                    )),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+            ]);
+        } else if let Some(value) = self.facet_value(key, ASTROLOGY_FACTS_FACET)
+            && let Ok(facts) = serde_json::from_value::<AstrologyFacts>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "Digest".to_string(),
+                    value: facts.digest(),
+                },
+                CardValueV1 {
+                    label: "Chart".to_string(),
+                    value: facts.chart_digest,
+                },
+                CardValueV1 {
+                    label: "Algorithm".to_string(),
+                    value: facts.algorithm,
+                },
+                CardValueV1 {
+                    label: "Orb".to_string(),
+                    value: format!("{} millidegrees", facts.orb_millidegrees),
+                },
+                CardValueV1 {
+                    label: "Placements".to_string(),
+                    value: facts
+                        .placements
+                        .iter()
+                        .map(|placement| {
+                            format!(
+                                "{}: {:?} +{} mdeg",
+                                placement.body, placement.sign, placement.degree_millidegrees
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+                CardValueV1 {
+                    label: "Aspects".to_string(),
+                    value: facts
+                        .aspects
+                        .iter()
+                        .map(|aspect| {
+                            format!(
+                                "{} / {}: {:?} ({} mdeg, orb {})",
+                                aspect.first,
+                                aspect.second,
+                                aspect.kind,
+                                aspect.separation_millidegrees,
+                                aspect.orb_millidegrees
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
                 },
             ]);
         } else if let Some(value) = self.facet_value(key, FIELD_FACET)

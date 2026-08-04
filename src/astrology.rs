@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeSet;
+use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -38,6 +39,34 @@ pub enum AstrologyError {
     InvalidChartSchema,
     #[error("astrology facts do not match their declared inputs: {0}")]
     FactsMismatch(&'static str),
+    #[error("astrology adapter failed: {0}")]
+    Adapter(String),
+}
+
+/// Adapter boundary for a real ephemeris implementation. The adapter owns
+/// astronomical calculation and source metadata; Cleromancy owns validation,
+/// digesting, structured derivation, and graph projection.
+pub trait AstrologyAdapter {
+    type Error: Display;
+
+    fn calculate(&self, moment: &AstrologyMoment) -> Result<AstrologyChart, Self::Error>;
+}
+
+/// Run an adapter while enforcing that its receipt is for the requested
+/// moment. This keeps an adapter from silently returning a chart for another
+/// instant or location.
+pub fn calculate_with_adapter<A: AstrologyAdapter>(
+    adapter: &A,
+    moment: &AstrologyMoment,
+) -> Result<AstrologyChart, AstrologyError> {
+    let chart = adapter
+        .calculate(moment)
+        .map_err(|error| AstrologyError::Adapter(error.to_string()))?;
+    if chart.moment != *moment {
+        return Err(AstrologyError::FactsMismatch("adapter moment"));
+    }
+    chart.validate()?;
+    Ok(chart)
 }
 
 /// The instant and optional location supplied to the chart calculator. The
