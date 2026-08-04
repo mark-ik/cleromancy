@@ -14,13 +14,16 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::host::{CONTEXT_FACET, FIELD_FACET, READING_FACET, REFLECTION_FACET, SESSION_FACET};
+use crate::host::{
+    CONTEXT_FACET, FIELD_FACET, READING_FACET, REFLECTION_FACET, SESSION_FACET,
+    THREE_CARD_SPREAD_FACET,
+};
 use crate::{
     CleromancyHost, ContextSnapshot, Field, HostError, Reading, ReadingEngine, ReadingError,
-    ReadingSession, Reflection,
+    ReadingSession, Reflection, ThreeCardRelationKind, ThreeCardSpread,
 };
 
-pub const SYNC_BATCH_SCHEMA: &str = "cleromancy.sync-batch/v3";
+pub const SYNC_BATCH_SCHEMA: &str = "cleromancy.sync-batch/v4";
 
 /// The explicit local setting controlling which Cleromancy truth may enter
 /// Graphshell's personal graph. Reading sync includes its contexts and exact
@@ -32,8 +35,8 @@ pub enum CleromancySyncSelection {
     #[default]
     Off,
     Contexts,
-    /// Context, field, sealed result, and the saved reading occasion. It does
-    /// not export reflective notes.
+    /// Context, field, sealed result, saved occasions, and authored spreads.
+    /// It does not export reflective notes.
     ContextsAndReadings,
     /// The full reading history, including separately attached reflections.
     ContextsReadingsAndReflections,
@@ -69,6 +72,7 @@ impl CleromancySyncSelection {
             facets.push(FIELD_FACET);
             facets.push(READING_FACET);
             facets.push(SESSION_FACET);
+            facets.push(THREE_CARD_SPREAD_FACET);
         }
         if self.includes_reflections() {
             facets.push(REFLECTION_FACET);
@@ -88,6 +92,7 @@ pub struct CleromancySyncBatch {
     pub fields: usize,
     pub readings: usize,
     pub sessions: usize,
+    pub spreads: usize,
     pub reflections: usize,
     pub digest: String,
 }
@@ -108,6 +113,7 @@ pub struct CleromancySyncImport {
     pub fields: usize,
     pub readings: usize,
     pub sessions: usize,
+    pub spreads: usize,
     pub reflections: usize,
 }
 
@@ -137,6 +143,10 @@ pub enum CleromancySyncError {
     },
     #[error("synced session {session} has no selected reading {reading}")]
     MissingSessionReading { session: String, reading: String },
+    #[error("synced spread {spread} has no selected session {session}")]
+    MissingSpreadSession { spread: String, session: String },
+    #[error("synced spread {spread} has no selected reading {reading}")]
+    MissingSpreadReading { spread: String, reading: String },
     #[error("synced reflection {reflection} has no selected session {session}")]
     MissingReflectionSession { reflection: String, session: String },
     #[error("personal graph projection has {0} operations waiting for causal history")]
@@ -168,6 +178,7 @@ pub fn export_sync_batch<B: Backend>(
     let mut fields = Vec::<(String, SelectedNode)>::new();
     let mut readings = Vec::<(Reading, SelectedNode)>::new();
     let mut sessions = Vec::<(ReadingSession, SelectedNode)>::new();
+    let mut spreads = Vec::<(ThreeCardSpread, SelectedNode)>::new();
     let mut reflections = Vec::<(Reflection, SelectedNode)>::new();
 
     if selection.includes_contexts() {
@@ -176,12 +187,14 @@ pub fn export_sync_batch<B: Backend>(
             let field = host.facet_value(key, FIELD_FACET);
             let reading = host.facet_value(key, READING_FACET);
             let session = host.facet_value(key, SESSION_FACET);
+            let spread = host.facet_value(key, THREE_CARD_SPREAD_FACET);
             let reflection = host.facet_value(key, REFLECTION_FACET);
             if [
                 context.is_some(),
                 field.is_some(),
                 reading.is_some(),
                 session.is_some(),
+                spread.is_some(),
                 reflection.is_some(),
             ]
             .into_iter()
@@ -237,6 +250,23 @@ pub fn export_sync_batch<B: Backend>(
                     &format!("cleromancy://session/{}", session.id),
                 )?;
                 sessions.push((session, selected_node(node, SESSION_FACET, value.clone())));
+            } else if selection.includes_sessions()
+                && let Some(value) = spread
+            {
+                let spread: ThreeCardSpread = serde_json::from_value(value.clone())
+                    .map_err(|e| invalid(node.id, format!("spread facet does not decode: {e}")))?;
+                spread
+                    .validate()
+                    .map_err(|e| invalid(node.id, e.to_string()))?;
+                validate_identity(
+                    node.id,
+                    node.url(),
+                    &format!("cleromancy://spread/three-card/{}", spread.id),
+                )?;
+                spreads.push((
+                    spread,
+                    selected_node(node, THREE_CARD_SPREAD_FACET, value.clone()),
+                ));
             } else if selection.includes_reflections()
                 && let Some(value) = reflection
             {
@@ -264,6 +294,7 @@ pub fn export_sync_batch<B: Backend>(
     fields.sort_by_key(|(_, node)| node.id);
     readings.sort_by_key(|(_, node)| node.id);
     sessions.sort_by_key(|(_, node)| node.id);
+    spreads.sort_by_key(|(_, node)| node.id);
     reflections.sort_by_key(|(_, node)| node.id);
     let context_ids = contexts
         .iter()
@@ -292,6 +323,9 @@ pub fn export_sync_batch<B: Backend>(
         append_node_events(&mut events, node);
     }
     for (_, node) in &sessions {
+        append_node_events(&mut events, node);
+    }
+    for (_, node) in &spreads {
         append_node_events(&mut events, node);
     }
     for (_, node) in &reflections {
@@ -368,6 +402,65 @@ pub fn export_sync_batch<B: Backend>(
             });
         }
     }
+    for (spread, node) in &spreads {
+        let Some(&session) = session_ids.get(&spread.session_id) else {
+            return Err(CleromancySyncError::MissingSpreadSession {
+                spread: spread.id.clone(),
+                session: spread.session_id.clone(),
+            });
+        };
+        events.push(PersonalGraphEvent::AssertRelation {
+            from: node.id,
+            to: session,
+            assertion: EdgeAssertion::Provenance {
+                sub_kind: mere::kernel::graph::ProvenanceSubKind::GeneratedFrom,
+            },
+        });
+        let placement_ids = spread
+            .placements
+            .iter()
+            .map(|placement| (placement.position, placement.reading_id.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for placement in &spread.placements {
+            let Some(&reading) = reading_ids.get(&placement.reading_id) else {
+                return Err(CleromancySyncError::MissingSpreadReading {
+                    spread: spread.id.clone(),
+                    reading: placement.reading_id.clone(),
+                });
+            };
+            events.push(PersonalGraphEvent::AssertRelation {
+                from: node.id,
+                to: reading,
+                assertion: EdgeAssertion::Containment {
+                    sub_kind: mere::kernel::graph::ContainmentSubKind::CollectionMember,
+                },
+            });
+        }
+        for relation in &spread.relations {
+            let Some(from_id) = placement_ids.get(&relation.from) else {
+                return Err(invalid(node.id, "spread relation source position"));
+            };
+            let Some(to_id) = placement_ids.get(&relation.to) else {
+                return Err(invalid(node.id, "spread relation target position"));
+            };
+            events.push(PersonalGraphEvent::AssertRelation {
+                from: reading_ids[from_id],
+                to: reading_ids[to_id],
+                assertion: EdgeAssertion::Semantic {
+                    sub_kind: match relation.kind {
+                        ThreeCardRelationKind::Questions => {
+                            mere::kernel::graph::SemanticSubKind::Questions
+                        }
+                        ThreeCardRelationKind::NextStep => {
+                            mere::kernel::graph::SemanticSubKind::NextStep
+                        }
+                    },
+                    label: Some(relation.label.clone()),
+                    decay_progress: None,
+                },
+            });
+        }
+    }
     for (reflection, node) in &reflections {
         let Some(&session) = session_ids.get(&reflection.session_id) else {
             return Err(CleromancySyncError::MissingReflectionSession {
@@ -395,6 +488,7 @@ pub fn export_sync_batch<B: Backend>(
         fields: fields.len(),
         readings: readings.len(),
         sessions: sessions.len(),
+        spreads: spreads.len(),
         reflections: reflections.len(),
         digest,
     })
@@ -421,12 +515,14 @@ pub fn import_sync_projection<B: Backend>(
         let field = format!("/facet/{FIELD_FACET}");
         let reading = format!("/facet/{READING_FACET}");
         let session = format!("/facet/{SESSION_FACET}");
+        let spread = format!("/facet/{THREE_CARD_SPREAD_FACET}");
         let reflection = format!("/facet/{REFLECTION_FACET}");
         if conflict.target.ends_with(&context)
             || (selection.includes_readings()
                 && (conflict.target.ends_with(&field)
                     || conflict.target.ends_with(&reading)
-                    || conflict.target.ends_with(&session)))
+                    || conflict.target.ends_with(&session)
+                    || conflict.target.ends_with(&spread)))
             || (selection.includes_reflections() && conflict.target.ends_with(&reflection))
         {
             return Err(CleromancySyncError::Conflict(conflict.target.clone()));
@@ -437,23 +533,27 @@ pub fn import_sync_projection<B: Backend>(
     let field_facet = FacetId::new(FIELD_FACET);
     let reading_facet = FacetId::new(READING_FACET);
     let session_facet = FacetId::new(SESSION_FACET);
+    let spread_facet = FacetId::new(THREE_CARD_SPREAD_FACET);
     let reflection_facet = FacetId::new(REFLECTION_FACET);
     let mut contexts = Vec::<ContextSnapshot>::new();
     let mut fields = Vec::<Field>::new();
     let mut readings = Vec::<Reading>::new();
     let mut sessions = Vec::<ReadingSession>::new();
+    let mut spreads = Vec::<ThreeCardSpread>::new();
     let mut reflections = Vec::<Reflection>::new();
     for (_, node) in projection.graph.nodes() {
         let context = projection.graph.facets().get(&node.id, &context_facet);
         let field = projection.graph.facets().get(&node.id, &field_facet);
         let reading = projection.graph.facets().get(&node.id, &reading_facet);
         let session = projection.graph.facets().get(&node.id, &session_facet);
+        let spread = projection.graph.facets().get(&node.id, &spread_facet);
         let reflection = projection.graph.facets().get(&node.id, &reflection_facet);
         if [
             context.is_some(),
             field.is_some(),
             reading.is_some(),
             session.is_some(),
+            spread.is_some(),
             reflection.is_some(),
         ]
         .into_iter()
@@ -511,6 +611,20 @@ pub fn import_sync_projection<B: Backend>(
                 &format!("cleromancy://session/{}", session.id),
             )?;
             sessions.push(session);
+        } else if selection.includes_sessions()
+            && let Some(value) = spread
+        {
+            let spread: ThreeCardSpread = serde_json::from_value(value.clone())
+                .map_err(|e| invalid(node.id, format!("spread facet does not decode: {e}")))?;
+            spread
+                .validate()
+                .map_err(|e| invalid(node.id, e.to_string()))?;
+            validate_identity(
+                node.id,
+                node.url(),
+                &format!("cleromancy://spread/three-card/{}", spread.id),
+            )?;
+            spreads.push(spread);
         } else if selection.includes_reflections()
             && let Some(value) = reflection
         {
@@ -531,6 +645,7 @@ pub fn import_sync_projection<B: Backend>(
     fields.sort_by_key(Field::digest);
     readings.sort_by(|left, right| left.id.cmp(&right.id));
     sessions.sort_by(|left, right| left.id.cmp(&right.id));
+    spreads.sort_by(|left, right| left.id.cmp(&right.id));
     reflections.sort_by(|left, right| left.id.cmp(&right.id));
     let contexts_by_digest = contexts
         .iter()
@@ -608,6 +723,47 @@ pub fn import_sync_projection<B: Backend>(
             }
         }
     }
+    for spread in &spreads {
+        let Some(session) = sessions_by_id.get(&spread.session_id) else {
+            return Err(CleromancySyncError::MissingSpreadSession {
+                spread: spread.id.clone(),
+                session: spread.session_id.clone(),
+            });
+        };
+        for placement in &spread.placements {
+            let Some(reading) = readings_by_id.get(&placement.reading_id) else {
+                return Err(CleromancySyncError::MissingSpreadReading {
+                    spread: spread.id.clone(),
+                    reading: placement.reading_id.clone(),
+                });
+            };
+            let Some(session_placement) = session
+                .placements
+                .iter()
+                .find(|candidate| candidate.position == placement.position.as_str())
+            else {
+                return Err(invalid(
+                    Graph::node_namespace_id(&format!(
+                        "cleromancy://spread/three-card/{}",
+                        spread.id
+                    )),
+                    "spread position is not in its session",
+                ));
+            };
+            if session_placement.reading_id != placement.reading_id
+                || reading.receipt.context_digest != session.context_digest
+                || reading.receipt.field_digest != session.field_digest
+            {
+                return Err(invalid(
+                    Graph::node_namespace_id(&format!(
+                        "cleromancy://spread/three-card/{}",
+                        spread.id
+                    )),
+                    "spread placement does not match its session",
+                ));
+            }
+        }
+    }
     for reflection in &reflections {
         if !sessions_by_id.contains_key(&reflection.session_id) {
             return Err(CleromancySyncError::MissingReflectionSession {
@@ -643,6 +799,15 @@ pub fn import_sync_projection<B: Backend>(
             session,
         )?;
     }
+    for spread in &spreads {
+        let session = sessions_by_id[&spread.session_id];
+        let spread_readings = spread
+            .placements
+            .iter()
+            .map(|placement| readings_by_id[&placement.reading_id].clone())
+            .collect::<Vec<_>>();
+        host.insert_three_card_spread(session, &spread_readings, spread)?;
+    }
     for reflection in &reflections {
         host.insert_reflection(sessions_by_id[&reflection.session_id], reflection)?;
     }
@@ -651,6 +816,7 @@ pub fn import_sync_projection<B: Backend>(
         fields: fields.len(),
         readings: readings.len(),
         sessions: sessions.len(),
+        spreads: spreads.len(),
         reflections: reflections.len(),
     })
 }

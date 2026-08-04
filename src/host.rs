@@ -32,7 +32,7 @@ use thiserror::Error;
 use crate::moirai::clotho::EntropySource;
 use crate::{
     ContextSnapshot, Field, Reading, ReadingEngine, ReadingError, ReadingSession, Reflection,
-    SessionError,
+    SessionError, SpreadError, ThreeCardPosition, ThreeCardRelationKind, ThreeCardSpread,
 };
 
 pub const HOST_SLOT: &str = "cleromancy/mere-host/v1";
@@ -42,6 +42,7 @@ pub const FIELD_FACET: &str = "cleromancy.field/v1";
 pub const READING_FACET: &str = "cleromancy.reading/v1";
 pub const SESSION_FACET: &str = "cleromancy.reading-session/v1";
 pub const REFLECTION_FACET: &str = "cleromancy.reflection/v1";
+pub const THREE_CARD_SPREAD_FACET: &str = "cleromancy.three-card-spread/v1";
 
 #[derive(Debug, Error)]
 pub enum HostError {
@@ -65,6 +66,8 @@ pub enum HostError {
     Clock,
     #[error(transparent)]
     Session(#[from] SessionError),
+    #[error(transparent)]
+    Spread(#[from] SpreadError),
     #[error(transparent)]
     Reading(#[from] ReadingError),
 }
@@ -290,6 +293,57 @@ impl<B: Backend> CleromancyHost<B> {
         )
     }
 
+    /// Cast the fixed authored three-card layout and save its ordered session
+    /// plus graph-visible position and relationship metadata.
+    pub fn record_three_card_spread_at_with_entropy(
+        &mut self,
+        context: &ContextSnapshot,
+        field: &Field,
+        created_at_ms: u64,
+        client_token: Option<String>,
+        entropy: &mut impl EntropySource,
+    ) -> Result<(ReadingSession, ThreeCardSpread, Vec<Reading>), HostError> {
+        let readings = (0..ThreeCardPosition::ALL.len())
+            .map(|_| ReadingEngine::cast_with(context, field, entropy))
+            .collect::<Result<Vec<_>, _>>()?;
+        let placements = ThreeCardPosition::ALL
+            .into_iter()
+            .zip(&readings)
+            .map(|(position, reading)| crate::ReadingPlacement {
+                position: position.as_str().to_string(),
+                reading_id: reading.id.clone(),
+            })
+            .collect();
+        let session = ReadingSession::with_placements(
+            created_at_ms,
+            event_nonce(entropy)?,
+            context.digest(),
+            field.digest(),
+            placements,
+            client_token,
+        )?;
+        self.insert_session(context, field, &readings, &session)?;
+        let spread = ThreeCardSpread::new(&session.id, &session.placements)?;
+        self.insert_three_card_spread(&session, &readings, &spread)?;
+        Ok((session, spread, readings))
+    }
+
+    pub fn record_three_card_spread_with_entropy(
+        &mut self,
+        context: &ContextSnapshot,
+        field: &Field,
+        client_token: Option<String>,
+        entropy: &mut impl EntropySource,
+    ) -> Result<(ReadingSession, ThreeCardSpread, Vec<Reading>), HostError> {
+        self.record_three_card_spread_at_with_entropy(
+            context,
+            field,
+            unix_time_ms()?,
+            client_token,
+            entropy,
+        )
+    }
+
     /// Record an immutable reflection without mutating the sealed result or
     /// the session to which it belongs.
     pub fn record_reflection_at_with_entropy(
@@ -408,6 +462,92 @@ impl<B: Backend> CleromancyHost<B> {
         Ok(key)
     }
 
+    pub fn insert_three_card_spread(
+        &mut self,
+        session: &ReadingSession,
+        readings: &[Reading],
+        spread: &ThreeCardSpread,
+    ) -> Result<NodeKey, HostError> {
+        session.validate()?;
+        spread.validate()?;
+        if spread.session_id != session.id {
+            return Err(SpreadError::InvalidSpread("bound session id".to_string()).into());
+        }
+        let session_key = self.session_key(session)?;
+        let mut reading_keys = BTreeMap::new();
+        for placement in &spread.placements {
+            let session_placement = session
+                .placements
+                .iter()
+                .find(|candidate| candidate.position == placement.position.as_str())
+                .ok_or_else(|| SpreadError::InvalidSpread("session positions".to_string()))?;
+            if session_placement.reading_id != placement.reading_id {
+                return Err(SpreadError::InvalidSpread("placement reading id".to_string()).into());
+            }
+            let reading = readings
+                .iter()
+                .find(|reading| reading.id == placement.reading_id)
+                .ok_or_else(|| HostError::MissingReadingDependency {
+                    kind: "reading",
+                    digest: placement.reading_id.clone(),
+                })?;
+            let key = self
+                .graph
+                .get_node_by_url(&format!("cleromancy://reading/{}", reading.id))
+                .map(|(key, _)| key)
+                .ok_or_else(|| HostError::MissingReadingDependency {
+                    kind: "reading",
+                    digest: reading.id.clone(),
+                })?;
+            reading_keys.insert(placement.position, key);
+        }
+        let key = self.upsert_node(
+            &format!("cleromancy://spread/three-card/{}", spread.id),
+            "Three-card spread",
+            ["spread", "three-card-spread"],
+        );
+        self.set_facet(
+            key,
+            THREE_CARD_SPREAD_FACET,
+            serde_json::to_value(spread).unwrap(),
+        )?;
+        assert_relation(
+            &mut self.graph,
+            key,
+            session_key,
+            EdgeAssertion::Provenance {
+                sub_kind: ProvenanceSubKind::GeneratedFrom,
+            },
+        );
+        for reading_key in reading_keys.values() {
+            assert_relation(
+                &mut self.graph,
+                key,
+                *reading_key,
+                EdgeAssertion::Containment {
+                    sub_kind: ContainmentSubKind::CollectionMember,
+                },
+            );
+        }
+        for relation in &spread.relations {
+            assert_relation(
+                &mut self.graph,
+                reading_keys[&relation.from],
+                reading_keys[&relation.to],
+                EdgeAssertion::Semantic {
+                    sub_kind: match relation.kind {
+                        ThreeCardRelationKind::Questions => SemanticSubKind::Questions,
+                        ThreeCardRelationKind::NextStep => SemanticSubKind::NextStep,
+                    },
+                    label: Some(relation.label.clone()),
+                    decay_progress: None,
+                },
+            );
+        }
+        self.changed();
+        Ok(key)
+    }
+
     /// Replay a reading from graph-resident truth alone. The caller supplies
     /// neither its context nor its candidate field.
     pub fn replay_reading(&self, reading: &Reading) -> Result<Reading, HostError> {
@@ -463,6 +603,42 @@ impl<B: Backend> CleromancyHost<B> {
         }
         self.validate_session_bindings(&context, &field, &readings, session)?;
         Ok(readings)
+    }
+
+    pub fn replay_three_card_spread(
+        &self,
+        spread: &ThreeCardSpread,
+    ) -> Result<Vec<Reading>, HostError> {
+        let stored = self.stored_facet::<ThreeCardSpread>(
+            &format!("cleromancy://spread/three-card/{}", spread.id),
+            THREE_CARD_SPREAD_FACET,
+            "spread",
+            &spread.id,
+        )?;
+        if stored != *spread {
+            return Err(SpreadError::InvalidSpread("stored value".to_string()).into());
+        }
+        let session = self.stored_facet::<ReadingSession>(
+            &format!("cleromancy://session/{}", spread.session_id),
+            SESSION_FACET,
+            "session",
+            &spread.session_id,
+        )?;
+        let readings = self.replay_session(&session)?;
+        let mut ordered = Vec::with_capacity(spread.placements.len());
+        for placement in &spread.placements {
+            ordered.push(
+                readings
+                    .iter()
+                    .find(|reading| reading.id == placement.reading_id)
+                    .ok_or_else(|| HostError::MissingReadingDependency {
+                        kind: "reading",
+                        digest: placement.reading_id.clone(),
+                    })?
+                    .clone(),
+            );
+        }
+        Ok(ordered)
     }
 
     pub fn facet_value(&self, key: NodeKey, facet: &str) -> Option<&Value> {
@@ -920,6 +1096,42 @@ impl<B: Backend> CleromancyHost<B> {
                     value: session
                         .client_token
                         .unwrap_or_else(|| "not supplied".to_string()),
+                },
+            ]);
+        } else if let Some(value) = self.facet_value(key, THREE_CARD_SPREAD_FACET)
+            && let Ok(spread) = serde_json::from_value::<ThreeCardSpread>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "Session".to_string(),
+                    value: spread.session_id,
+                },
+                CardValueV1 {
+                    label: "Placements".to_string(),
+                    value: spread
+                        .placements
+                        .iter()
+                        .map(|placement| {
+                            format!("{}: {}", placement.position.as_str(), placement.reading_id)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+                CardValueV1 {
+                    label: "Relationships".to_string(),
+                    value: spread
+                        .relations
+                        .iter()
+                        .map(|relation| {
+                            format!(
+                                "{} -> {} ({})",
+                                relation.from.as_str(),
+                                relation.to.as_str(),
+                                relation.label
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
                 },
             ]);
         } else if let Some(value) = self.facet_value(key, REFLECTION_FACET)

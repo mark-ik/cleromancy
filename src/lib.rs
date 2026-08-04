@@ -14,6 +14,7 @@ mod projection;
 pub mod reading;
 pub mod servitors;
 pub mod session;
+pub mod spread;
 #[cfg(all(feature = "personal-sync", not(target_arch = "wasm32")))]
 pub mod sync;
 pub mod tarot;
@@ -42,6 +43,10 @@ pub use servitors::{ServitorAccess, ServitorAccessError};
 pub use session::{
     READING_SESSION_SCHEMA, REFLECTION_SCHEMA, ReadingPlacement, ReadingSession, Reflection,
     SessionError,
+};
+pub use spread::{
+    SpreadError, THREE_CARD_SPREAD_SCHEMA, ThreeCardPlacement, ThreeCardPosition,
+    ThreeCardRelation, ThreeCardRelationKind, ThreeCardSpread,
 };
 #[cfg(all(feature = "personal-sync", not(target_arch = "wasm32")))]
 pub use sync::{

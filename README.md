@@ -201,6 +201,30 @@ multi-card spread system. See
 `design_docs/2026-08-04_a7_reading_sessions.md` for its sync and privacy
 boundary.
 
+## A8
+
+A8 adds one authored three-card layout without changing the A7 session schema.
+Each secure cast is saved at `foundation`, `tension`, or `next_step`, and a
+`cleromancy.three-card-spread/v1` node commits those bindings plus two explicit
+graph relationships: tension tests the foundation, and the next step answers
+the tension. The spread card, session, sealed results, context, and field all
+remain separately inspectable and replayable.
+
+`ContextsAndReadings` sync now carries spread nodes as selected graph truth;
+the H7 adapter remains the owner of identity, admission, causal history,
+conflicts, storage, and transport.
+
+```powershell
+cargo test --test a8
+cargo test --features personal-sync --test a8_sync
+cargo run --bin a8_three_card_receipt -- `
+  receipts/a8-three-card.html `
+  receipts/a8-three-card.json
+```
+
+See `design_docs/2026-08-04_a8_three_card_spread.md` for the fixed layout,
+sync boundary, and stop rule.
+
 ## License
 
 MIT OR Apache-2.0.

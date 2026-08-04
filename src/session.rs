@@ -69,13 +69,30 @@ impl ReadingSession {
         reading_id: impl Into<String>,
         client_token: Option<String>,
     ) -> Result<Self, SessionError> {
+        Self::with_placements(
+            created_at_ms,
+            event_nonce,
+            context_digest,
+            field_digest,
+            vec![ReadingPlacement {
+                position: "focus".to_string(),
+                reading_id: reading_id.into(),
+            }],
+            client_token,
+        )
+    }
+
+    pub fn with_placements(
+        created_at_ms: u64,
+        event_nonce: impl Into<String>,
+        context_digest: impl Into<String>,
+        field_digest: impl Into<String>,
+        placements: Vec<ReadingPlacement>,
+        client_token: Option<String>,
+    ) -> Result<Self, SessionError> {
         let event_nonce = event_nonce.into();
         let context_digest = context_digest.into();
         let field_digest = field_digest.into();
-        let placements = vec![ReadingPlacement {
-            position: "focus".to_string(),
-            reading_id: reading_id.into(),
-        }];
         let id = reading_session_id(
             created_at_ms,
             &event_nonce,
