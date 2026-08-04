@@ -296,6 +296,26 @@ cargo test --test a12
 See `design_docs/2026-08-04_a12_field_composer.md` for the validation and
 ownership boundary.
 
+## A13
+
+A13 adds an explicit astrology calculation boundary. `AstrologyChart` records
+the named ephemeris adapter, engine, ephemeris, UTC instant, optional
+coordinates, and integer body positions. `AstrologyFacts` deterministically
+derives zodiac placements and orb-bounded major aspects from those positions,
+then binds the result back to the chart digest.
+
+This is structured context, not an ephemeris engine or an interpretation
+catalog. It does not parse timestamps, infer houses, generate prose, or claim
+prediction. The source calculation remains inspectable and replayable before a
+caller combines the facts with a field or reading.
+
+```powershell
+cargo test --test a13
+```
+
+See `design_docs/2026-08-04_a13_astrology_facts.md` for the source and
+interpretation boundary.
+
 ## License
 
 MIT OR Apache-2.0.
