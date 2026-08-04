@@ -21,6 +21,7 @@ pub struct IntentLimits {
     pub max_payload_bytes: usize,
     pub max_candidates: usize,
     pub max_die_sides: u32,
+    pub max_client_token_bytes: usize,
 }
 
 impl Default for IntentLimits {
@@ -29,6 +30,7 @@ impl Default for IntentLimits {
             max_payload_bytes: 64 * 1024,
             max_candidates: 512,
             max_die_sides: 1_000,
+            max_client_token_bytes: 256,
         }
     }
 }
@@ -40,6 +42,10 @@ pub struct ReadingIntentPayload {
     pub field: Field,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<SealedEnrichment>,
+    /// Opaque caller correlation carried onto the saved session. An accepted
+    /// intent still requires resnapshot before the caller can inspect it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 impl ReadingIntentPayload {
@@ -48,6 +54,7 @@ impl ReadingIntentPayload {
             schema: READ_SCHEMA.to_string(),
             field,
             enrichment: None,
+            client_token: None,
         }
     }
 
@@ -56,11 +63,17 @@ impl ReadingIntentPayload {
             schema: SELECT_SCHEMA.to_string(),
             field,
             enrichment: None,
+            client_token: None,
         }
     }
 
     pub fn with_enrichment(mut self, evidence: SealedEnrichment) -> Self {
         self.enrichment = Some(evidence);
+        self
+    }
+
+    pub fn with_client_token(mut self, client_token: impl Into<String>) -> Self {
+        self.client_token = Some(client_token.into());
         self
     }
 }
@@ -71,6 +84,8 @@ pub struct RollIntentPayload {
     pub schema: String,
     pub sides: u32,
     pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 impl RollIntentPayload {
@@ -79,11 +94,17 @@ impl RollIntentPayload {
             schema: ROLL_SCHEMA.to_string(),
             sides,
             label: None,
+            client_token: None,
         }
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_client_token(mut self, client_token: impl Into<String>) -> Self {
+        self.client_token = Some(client_token.into());
         self
     }
 

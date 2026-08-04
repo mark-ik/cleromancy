@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::{BTreeMap, HashMap};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chartulary::{FacetError, FacetId};
 use graphshell_protocol::{
@@ -13,7 +14,8 @@ use graphshell_protocol::{
 use mere::kernel::geometry::PortablePoint;
 use mere::kernel::graph::apply::{GraphDelta, add_node, apply_graph_delta, assert_relation};
 use mere::kernel::graph::{
-    EdgeAssertion, Graph, NodeFacetStore, NodeKey, ProvenanceSubKind, RelationKind,
+    ContainmentSubKind, EdgeAssertion, Graph, NodeFacetStore, NodeKey, ProvenanceSubKind,
+    RelationKind, SemanticSubKind,
 };
 use mere::kernel::persistence::GraphSnapshot;
 use muniment::{Backend, JsonSlots, StoreError};
@@ -27,13 +29,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{ContextSnapshot, Field, Reading, ReadingEngine, ReadingError};
+use crate::moirai::clotho::EntropySource;
+use crate::{
+    ContextSnapshot, Field, Reading, ReadingEngine, ReadingError, ReadingSession, Reflection,
+    SessionError,
+};
 
 pub const HOST_SLOT: &str = "cleromancy/mere-host/v1";
 pub const LOCAL_SESSION: &str = "local:cleromancy";
 pub const CONTEXT_FACET: &str = "cleromancy.context/v1";
 pub const FIELD_FACET: &str = "cleromancy.field/v1";
 pub const READING_FACET: &str = "cleromancy.reading/v1";
+pub const SESSION_FACET: &str = "cleromancy.reading-session/v1";
+pub const REFLECTION_FACET: &str = "cleromancy.reflection/v1";
 
 #[derive(Debug, Error)]
 pub enum HostError {
@@ -51,6 +59,12 @@ pub enum HostError {
     MissingReadingDependency { kind: &'static str, digest: String },
     #[error("stored {facet} facet does not decode: {reason}")]
     InvalidStoredFacet { facet: &'static str, reason: String },
+    #[error("reading session requires stored {kind} {id}")]
+    MissingSessionDependency { kind: &'static str, id: String },
+    #[error("the system clock precedes the Unix epoch")]
+    Clock,
+    #[error(transparent)]
+    Session(#[from] SessionError),
     #[error(transparent)]
     Reading(#[from] ReadingError),
 }
@@ -231,6 +245,169 @@ impl<B: Backend> CleromancyHost<B> {
         Ok(key)
     }
 
+    /// Record a new occasion for a sealed result. This leaves the result
+    /// receipt untouched, so repeated calculated reads can remain separately
+    /// saved even when they resolve to the same content-addressed reading.
+    pub fn record_reading_session_at_with_entropy(
+        &mut self,
+        context: &ContextSnapshot,
+        field: &Field,
+        reading: &Reading,
+        created_at_ms: u64,
+        client_token: Option<String>,
+        entropy: &mut impl EntropySource,
+    ) -> Result<ReadingSession, HostError> {
+        let event_nonce = event_nonce(entropy)?;
+        let session = ReadingSession::single(
+            created_at_ms,
+            event_nonce,
+            context.digest(),
+            field.digest(),
+            &reading.id,
+            client_token,
+        )?;
+        self.insert_session(context, field, std::slice::from_ref(reading), &session)?;
+        Ok(session)
+    }
+
+    /// Production convenience for a session timestamped at the local host.
+    /// Tests and import use the explicit `*_at_with_entropy` form above.
+    pub fn record_reading_session_with_entropy(
+        &mut self,
+        context: &ContextSnapshot,
+        field: &Field,
+        reading: &Reading,
+        client_token: Option<String>,
+        entropy: &mut impl EntropySource,
+    ) -> Result<ReadingSession, HostError> {
+        self.record_reading_session_at_with_entropy(
+            context,
+            field,
+            reading,
+            unix_time_ms()?,
+            client_token,
+            entropy,
+        )
+    }
+
+    /// Record an immutable reflection without mutating the sealed result or
+    /// the session to which it belongs.
+    pub fn record_reflection_at_with_entropy(
+        &mut self,
+        session: &ReadingSession,
+        created_at_ms: u64,
+        body: impl Into<String>,
+        entropy: &mut impl EntropySource,
+    ) -> Result<Reflection, HostError> {
+        let reflection = Reflection::new(&session.id, created_at_ms, event_nonce(entropy)?, body)?;
+        self.insert_reflection(session, &reflection)?;
+        Ok(reflection)
+    }
+
+    /// Production convenience for a reflection timestamped at the local host.
+    pub fn record_reflection_with_entropy(
+        &mut self,
+        session: &ReadingSession,
+        body: impl Into<String>,
+        entropy: &mut impl EntropySource,
+    ) -> Result<Reflection, HostError> {
+        self.record_reflection_at_with_entropy(session, unix_time_ms()?, body, entropy)
+    }
+
+    /// Store a session whose references have already been validated by the
+    /// caller or a sync projection. This is public so import remains a thin
+    /// mapping layer instead of a second model.
+    pub fn insert_session(
+        &mut self,
+        context: &ContextSnapshot,
+        field: &Field,
+        readings: &[Reading],
+        session: &ReadingSession,
+    ) -> Result<NodeKey, HostError> {
+        self.validate_session_bindings(context, field, readings, session)?;
+        let context_key = self.insert_context(context)?;
+        let field_key = self.insert_field(field)?;
+        let mut reading_keys = Vec::with_capacity(session.placements.len());
+        for placement in &session.placements {
+            let reading = readings
+                .iter()
+                .find(|reading| reading.id == placement.reading_id)
+                .expect("session bindings were validated before insertion");
+            reading_keys.push(self.insert_reading(context, field, reading)?);
+        }
+        let key = self.upsert_node(
+            &format!("cleromancy://session/{}", session.id),
+            "Reading session",
+            ["reading-session"],
+        );
+        self.set_facet(key, SESSION_FACET, serde_json::to_value(session).unwrap())?;
+        assert_relation(
+            &mut self.graph,
+            key,
+            context_key,
+            EdgeAssertion::Provenance {
+                sub_kind: ProvenanceSubKind::GeneratedFrom,
+            },
+        );
+        assert_relation(
+            &mut self.graph,
+            key,
+            field_key,
+            EdgeAssertion::Provenance {
+                sub_kind: ProvenanceSubKind::GeneratedFrom,
+            },
+        );
+        for reading_key in reading_keys {
+            assert_relation(
+                &mut self.graph,
+                key,
+                reading_key,
+                EdgeAssertion::Containment {
+                    sub_kind: ContainmentSubKind::CollectionMember,
+                },
+            );
+        }
+        self.changed();
+        Ok(key)
+    }
+
+    /// Attach one immutable reflection to a stored session. Later edits are a
+    /// new reflection node, preserving the earlier record for inspection.
+    pub fn insert_reflection(
+        &mut self,
+        session: &ReadingSession,
+        reflection: &Reflection,
+    ) -> Result<NodeKey, HostError> {
+        session.validate()?;
+        reflection.validate()?;
+        if reflection.session_id != session.id {
+            return Err(SessionError::InvalidReflection("bound session id".to_string()).into());
+        }
+        let session_key = self.session_key(session)?;
+        let key = self.upsert_node(
+            &format!("cleromancy://reflection/{}", reflection.id),
+            "Reading reflection",
+            ["reflection"],
+        );
+        self.set_facet(
+            key,
+            REFLECTION_FACET,
+            serde_json::to_value(reflection).unwrap(),
+        )?;
+        assert_relation(
+            &mut self.graph,
+            key,
+            session_key,
+            EdgeAssertion::Semantic {
+                sub_kind: SemanticSubKind::Elaborates,
+                label: Some("reflects on".to_string()),
+                decay_progress: None,
+            },
+        );
+        self.changed();
+        Ok(key)
+    }
+
     /// Replay a reading from graph-resident truth alone. The caller supplies
     /// neither its context nor its candidate field.
     pub fn replay_reading(&self, reading: &Reading) -> Result<Reading, HostError> {
@@ -247,6 +424,45 @@ impl<B: Backend> CleromancyHost<B> {
             &reading.receipt.field_digest,
         )?;
         Ok(ReadingEngine::replay(&context, &field, &reading.receipt)?)
+    }
+
+    /// Resolve a stored reading occasion solely from graph-resident context,
+    /// field, and sealed result nodes. The returned order is the session's
+    /// declared placement order.
+    pub fn replay_session(&self, session: &ReadingSession) -> Result<Vec<Reading>, HostError> {
+        let stored = self.stored_facet::<ReadingSession>(
+            &format!("cleromancy://session/{}", session.id),
+            SESSION_FACET,
+            "session",
+            &session.id,
+        )?;
+        if stored != *session {
+            return Err(SessionError::InvalidSession("stored value".to_string()).into());
+        }
+        let context = self.stored_facet::<ContextSnapshot>(
+            &format!("cleromancy://context/{}", session.context_digest),
+            CONTEXT_FACET,
+            "context",
+            &session.context_digest,
+        )?;
+        let field = self.stored_facet::<Field>(
+            &format!("cleromancy://field/{}", session.field_digest),
+            FIELD_FACET,
+            "field",
+            &session.field_digest,
+        )?;
+        let mut readings = Vec::with_capacity(session.placements.len());
+        for placement in &session.placements {
+            let reading = self.stored_facet::<Reading>(
+                &format!("cleromancy://reading/{}", placement.reading_id),
+                READING_FACET,
+                "reading",
+                &placement.reading_id,
+            )?;
+            readings.push(reading);
+        }
+        self.validate_session_bindings(&context, &field, &readings, session)?;
+        Ok(readings)
     }
 
     pub fn facet_value(&self, key: NodeKey, facet: &str) -> Option<&Value> {
@@ -277,6 +493,72 @@ impl<B: Backend> CleromancyHost<B> {
             facet,
             reason: error.to_string(),
         })
+    }
+
+    fn session_key(&self, session: &ReadingSession) -> Result<NodeKey, HostError> {
+        let (key, _) = self
+            .graph
+            .get_node_by_url(&format!("cleromancy://session/{}", session.id))
+            .ok_or_else(|| HostError::MissingSessionDependency {
+                kind: "session",
+                id: session.id.clone(),
+            })?;
+        let stored = self.facet_value(key, SESSION_FACET).ok_or_else(|| {
+            HostError::MissingSessionDependency {
+                kind: "session",
+                id: session.id.clone(),
+            }
+        })?;
+        let stored: ReadingSession = serde_json::from_value(stored.clone()).map_err(|error| {
+            HostError::InvalidStoredFacet {
+                facet: SESSION_FACET,
+                reason: error.to_string(),
+            }
+        })?;
+        if stored != *session {
+            return Err(SessionError::InvalidSession("stored value".to_string()).into());
+        }
+        Ok(key)
+    }
+
+    fn validate_session_bindings(
+        &self,
+        context: &ContextSnapshot,
+        field: &Field,
+        readings: &[Reading],
+        session: &ReadingSession,
+    ) -> Result<(), HostError> {
+        session.validate()?;
+        if session.context_digest != context.digest() {
+            return Err(SessionError::InvalidSession("bound context digest".to_string()).into());
+        }
+        if session.field_digest != field.digest() {
+            return Err(SessionError::InvalidSession("bound field digest".to_string()).into());
+        }
+        for placement in &session.placements {
+            let reading = readings
+                .iter()
+                .find(|reading| reading.id == placement.reading_id)
+                .ok_or_else(|| HostError::MissingSessionDependency {
+                    kind: "reading",
+                    id: placement.reading_id.clone(),
+                })?;
+            if reading.receipt.context_digest != session.context_digest {
+                return Err(
+                    SessionError::InvalidSession("reading context digest".to_string()).into(),
+                );
+            }
+            if reading.receipt.field_digest != session.field_digest {
+                return Err(
+                    SessionError::InvalidSession("reading field digest".to_string()).into(),
+                );
+            }
+            let replayed = ReadingEngine::replay(context, field, &reading.receipt)?;
+            if replayed != *reading {
+                return Err(ReadingError::ReceiptMismatch("sealed reading".to_string()).into());
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn active_revision(&self) -> Option<(SceneEpoch, Revision)> {
@@ -614,6 +896,49 @@ impl<B: Backend> CleromancyHost<B> {
                     values.extend(enrichment_values);
                 }
             }
+        } else if let Some(value) = self.facet_value(key, SESSION_FACET)
+            && let Ok(session) = serde_json::from_value::<ReadingSession>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "Recorded at".to_string(),
+                    value: format!("{} ms since Unix epoch", session.created_at_ms),
+                },
+                CardValueV1 {
+                    label: "Placements".to_string(),
+                    value: session
+                        .placements
+                        .iter()
+                        .map(|placement| {
+                            format!("{}: {}", placement.position, placement.reading_id)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+                CardValueV1 {
+                    label: "Client token".to_string(),
+                    value: session
+                        .client_token
+                        .unwrap_or_else(|| "not supplied".to_string()),
+                },
+            ]);
+        } else if let Some(value) = self.facet_value(key, REFLECTION_FACET)
+            && let Ok(reflection) = serde_json::from_value::<Reflection>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "Recorded at".to_string(),
+                    value: format!("{} ms since Unix epoch", reflection.created_at_ms),
+                },
+                CardValueV1 {
+                    label: "Session".to_string(),
+                    value: reflection.session_id,
+                },
+                CardValueV1 {
+                    label: "Reflection".to_string(),
+                    value: reflection.body,
+                },
+            ]);
         } else if let Some(value) = self.facet_value(key, FIELD_FACET)
             && let Ok(field) = serde_json::from_value::<Field>(value.clone())
         {
@@ -662,6 +987,19 @@ impl<B: Backend> CleromancyHost<B> {
             media: Vec::new(),
         }
     }
+}
+
+fn event_nonce(entropy: &mut impl EntropySource) -> Result<String, HostError> {
+    let high = entropy.next_u64()?;
+    let low = entropy.next_u64()?;
+    Ok(format!("{high:016x}{low:016x}"))
+}
+
+fn unix_time_ms() -> Result<u64, HostError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| HostError::Clock)?;
+    u64::try_from(duration.as_millis()).map_err(|_| HostError::Clock)
 }
 
 fn relation_kind_label(kind: RelationKind) -> &'static str {

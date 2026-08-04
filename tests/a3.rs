@@ -4,12 +4,12 @@
 use cleromancy::servitor::{Cap, Grant, Mode, Subject};
 use cleromancy::{
     CleromancyApp, CleromancyHost, READ_INTENT, READ_SCOPE, ROLL_INTENT, Reading,
-    ReadingIntentPayload, RollIntentPayload, SELECT_INTENT, a0_fixture,
+    ReadingIntentPayload, ReadingSession, RollIntentPayload, SELECT_INTENT, a0_fixture,
 };
 use graphshell_local::LocalCarrier;
 use graphshell_protocol::{
     Carrier, CarrierRequestBody, CarrierResponseBody, IntentInvocation, IntentResult,
-    ProjectionSnapshot,
+    PortableCardV1, ProjectionSnapshot, ResourceRequest,
 };
 use muniment::MemoryBackend;
 
@@ -47,7 +47,7 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
         &first,
         target,
         READ_INTENT,
-        &ReadingIntentPayload::read(field.clone()),
+        &ReadingIntentPayload::read(field.clone()).with_client_token("a3-read"),
     );
     assert_eq!(
         request_intent(&mut carrier, read_intent.clone()),
@@ -61,6 +61,11 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
     ));
 
     let second = snapshot(&mut carrier, &request);
+    assert!(cards(&mut carrier, &second).iter().any(|card| {
+        card.values
+            .iter()
+            .any(|value| value.label == "Client token" && value.value == "a3-read")
+    }));
     assert_eq!(
         request_intent(
             &mut carrier,
@@ -119,6 +124,20 @@ fn bound_authorized_consumer_reads_selects_and_rolls_through_the_wire() {
         rolled.clone()
     );
     assert!((1..=6).contains(&rolled.candidate_id.parse::<u32>().unwrap()));
+    let sessions = sessions(carrier.endpoint());
+    assert_eq!(sessions.len(), 3);
+    let read_session = sessions
+        .iter()
+        .find(|session| session.client_token.as_deref() == Some("a3-read"))
+        .expect("resnapshot exposes the caller-correlated reading session");
+    assert_eq!(
+        carrier
+            .endpoint()
+            .host
+            .replay_session(read_session)
+            .unwrap(),
+        vec![calculated.clone()]
+    );
     assert_eq!(carrier.endpoint().servitors().audit().revision(), 4);
 }
 
@@ -176,7 +195,7 @@ fn payload_identity_cannot_replace_transport_binding_or_servitor_authority() {
         IntentResult::Rejected { reason } if reason.contains("Servitor")
     ));
     assert_eq!(request_intent(&mut carrier, intent), IntentResult::Accepted);
-    assert_eq!(carrier.endpoint().host.graph().nodes().count(), 3);
+    assert_eq!(carrier.endpoint().host.graph().nodes().count(), 4);
     assert_eq!(carrier.endpoint().servitors().audit().revision(), 2);
     assert!(carrier.take_notice().is_some());
 }
@@ -243,6 +262,33 @@ fn request_intent(carrier: &mut impl Carrier, intent: IntentInvocation) -> Inten
     }
 }
 
+fn cards(carrier: &mut impl Carrier, snapshot: &ProjectionSnapshot) -> Vec<PortableCardV1> {
+    snapshot
+        .presentation
+        .bindings
+        .iter()
+        .flat_map(|binding| {
+            snapshot
+                .presentation
+                .offers_for(binding.instance)
+                .into_iter()
+                .flatten()
+        })
+        .map(|offer| {
+            let response = carrier
+                .request(CarrierRequestBody::Resource(ResourceRequest {
+                    session: snapshot.session.clone(),
+                    resource: offer.resource,
+                }))
+                .unwrap();
+            let CarrierResponseBody::Resource(response) = response else {
+                panic!("expected a portable-card resource");
+            };
+            serde_json::from_slice(&response.bytes).unwrap()
+        })
+        .collect()
+}
+
 fn readings(app: &CleromancyApp<MemoryBackend>) -> Vec<Reading> {
     app.host
         .graph()
@@ -250,6 +296,18 @@ fn readings(app: &CleromancyApp<MemoryBackend>) -> Vec<Reading> {
         .filter_map(|(key, _)| {
             app.host
                 .facet_value(key, cleromancy::host::READING_FACET)
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+        })
+        .collect()
+}
+
+fn sessions(app: &CleromancyApp<MemoryBackend>) -> Vec<ReadingSession> {
+    app.host
+        .graph()
+        .nodes()
+        .filter_map(|(key, _)| {
+            app.host
+                .facet_value(key, cleromancy::host::SESSION_FACET)
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
         })
         .collect()

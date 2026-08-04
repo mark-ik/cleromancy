@@ -173,6 +173,34 @@ cargo run --bin a6_tarot_receipt -- `
 See `design_docs/2026-08-03_a6_major_arcana_pack.md` for the content and rule
 boundary.
 
+## A7
+
+A7 separates the sealed result from the saved occasion. A
+`cleromancy.reading-session/v1` node records local time, a CSPRNG event nonce,
+the exact context and field, ordered result placements, and an optional opaque
+caller token. Repeating a deterministic read can therefore save two distinct
+sessions while both point to the same replayable result. A separately addressed
+immutable reflection can elaborate a session without changing it or the result.
+
+Graphshell `read`, `select`, and `roll` commands now create a session. Accepted
+still means resnapshot: a caller supplies a non-secret token, waits for the
+revision notice, and finds the matching session card. `ContextsAndReadings`
+syncs sessions with their replay dependencies. Reflections need the explicit
+`ContextsReadingsAndReflections` selection.
+
+```powershell
+cargo test --test a7
+cargo test --features personal-sync --test a7_sync
+cargo run --bin a7_session_receipt -- `
+  receipts/a7-session.html `
+  receipts/a7-session.json
+```
+
+This is the data and projection trunk, not a headed reading editor or a
+multi-card spread system. See
+`design_docs/2026-08-04_a7_reading_sessions.md` for its sync and privacy
+boundary.
+
 ## License
 
 MIT OR Apache-2.0.

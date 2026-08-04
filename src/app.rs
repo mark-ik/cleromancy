@@ -138,7 +138,7 @@ impl<B: Backend> CleromancyApp<B> {
         let scope = scope_for(&intent.intent)
             .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
 
-        let (field, reading) = match intent.intent.as_str() {
+        let (field, reading, client_token) = match intent.intent.as_str() {
             READ_INTENT | SELECT_INTENT => {
                 let payload = match serde_json::from_slice::<ReadingIntentPayload>(&intent.payload)
                 {
@@ -158,6 +158,14 @@ impl<B: Backend> CleromancyApp<B> {
                 {
                     return Ok(rejected(
                         "candidate count is outside the configured intent limits",
+                    ));
+                }
+                if invalid_client_token(
+                    payload.client_token.as_deref(),
+                    self.intent_limits.max_client_token_bytes,
+                ) {
+                    return Ok(rejected(
+                        "client token is outside the configured intent limits",
                     ));
                 }
                 if self
@@ -184,7 +192,7 @@ impl<B: Backend> CleromancyApp<B> {
                     _ => unreachable!("the match is limited to read and select"),
                 };
                 match result {
-                    Ok(reading) => (payload.field, reading),
+                    Ok(reading) => (payload.field, reading, payload.client_token),
                     Err(ReadingError::Entropy(error)) => {
                         return Err(AppError::Intent(format!("entropy failed: {error}")));
                     }
@@ -206,6 +214,14 @@ impl<B: Backend> CleromancyApp<B> {
                         "die sides are outside the configured intent limits",
                     ));
                 }
+                if invalid_client_token(
+                    payload.client_token.as_deref(),
+                    self.intent_limits.max_client_token_bytes,
+                ) {
+                    return Ok(rejected(
+                        "client token is outside the configured intent limits",
+                    ));
+                }
                 if self
                     .servitors
                     .petition_write(subject, scope, "cleromancy.roll request")
@@ -215,7 +231,7 @@ impl<B: Backend> CleromancyApp<B> {
                 }
                 let field = die_field(payload.sides, payload.label.as_deref());
                 match ReadingEngine::cast_with(&context, &field, entropy) {
-                    Ok(reading) => (field, reading),
+                    Ok(reading) => (field, reading, payload.client_token),
                     Err(ReadingError::Entropy(error)) => {
                         return Err(AppError::Intent(format!("entropy failed: {error}")));
                     }
@@ -226,7 +242,13 @@ impl<B: Backend> CleromancyApp<B> {
             }
             _ => return Ok(rejected("intent is not implemented")),
         };
-        self.host.insert_reading(&context, &field, &reading)?;
+        self.host.record_reading_session_with_entropy(
+            &context,
+            &field,
+            &reading,
+            client_token,
+            entropy,
+        )?;
         self.pending_notice = true;
         Ok(IntentResult::Accepted)
     }
@@ -369,6 +391,10 @@ impl<B: Backend> CleromancyApp<B> {
             intents: Vec::new(),
         }))
     }
+}
+
+fn invalid_client_token(client_token: Option<&str>, max_bytes: usize) -> bool {
+    client_token.is_some_and(|token| token.is_empty() || token.len() > max_bytes)
 }
 
 fn rejected(reason: impl Into<String>) -> IntentResult {
