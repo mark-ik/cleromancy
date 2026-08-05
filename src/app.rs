@@ -15,7 +15,8 @@ use thiserror::Error;
 
 use crate::enrichment::{EnrichmentError, EnrichmentReport, ExternalProjection, mount_carrier};
 use crate::intents::{
-    COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, CompositionLayout, FieldSelection,
+    AstrologyReadingConcurrenceIntentPayload, COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA,
+    CREATE_CONCURRENCE_INTENT, CREATE_CONCURRENCE_SCHEMA, CompositionLayout, FieldSelection,
     IntentLimits, READ_INTENT, READ_SCHEMA, ROLL_INTENT, ROLL_SCHEMA,
     ReadingCompositionIntentPayload, ReadingIntentPayload, RollIntentPayload, SELECT_INTENT,
     SELECT_SCHEMA, THREE_CARD_SPREAD_INTENT, THREE_CARD_SPREAD_INTENT_SCHEMA,
@@ -134,12 +135,79 @@ impl<B: Backend> CleromancyApp<B> {
                 "the containing transport did not bind an authenticated subject",
             ));
         };
+        let scope = scope_for(&intent.intent)
+            .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
+
+        if intent.intent == CREATE_CONCURRENCE_INTENT {
+            let payload = match serde_json::from_slice::<AstrologyReadingConcurrenceIntentPayload>(
+                &intent.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    return Ok(rejected(format!("invalid concurrence payload: {error}")));
+                }
+            };
+            if payload.schema != CREATE_CONCURRENCE_SCHEMA {
+                return Ok(rejected(
+                    "concurrence payload schema does not match the intent",
+                ));
+            }
+            if invalid_digest(&payload.astrology_facts_digest)
+                || invalid_digest(&payload.reading_session_id)
+            {
+                return Ok(rejected(
+                    "selected facts digest or reading session ID is invalid",
+                ));
+            }
+            if !self.host.concurrence_target_matches(
+                intent.target,
+                &payload.astrology_facts_digest,
+                &payload.reading_session_id,
+            ) {
+                return Ok(rejected(
+                    "the target card is not one selected member of the pattern occasion",
+                ));
+            }
+            match self.host.validate_astrology_reading_concurrence_members(
+                &payload.astrology_facts_digest,
+                &payload.reading_session_id,
+            ) {
+                Ok(()) => {}
+                Err(HostError::MissingReadingDependency { .. }) => {
+                    return Ok(rejected(
+                        "selected facts or reading session was not found in graph truth",
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            }
+            if self
+                .servitors
+                .petition_write(subject, scope, "cleromancy.create-concurrence request")
+                .is_err()
+            {
+                return Ok(rejected("Servitor refused the bound subject"));
+            }
+            match self.host.create_astrology_reading_concurrence(
+                &payload.astrology_facts_digest,
+                &payload.reading_session_id,
+            ) {
+                Ok(_) => {
+                    self.pending_notice = true;
+                    return Ok(IntentResult::Accepted);
+                }
+                Err(HostError::MissingReadingDependency { .. }) => {
+                    return Ok(rejected(
+                        "selected facts or reading session was not found in graph truth",
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+
         let context = self
             .host
             .context_for_instance(intent.target)
             .ok_or_else(|| AppError::Intent("advertised context disappeared".to_string()))?;
-        let scope = scope_for(&intent.intent)
-            .ok_or_else(|| AppError::Intent("advertised intent has no scope".to_string()))?;
 
         if intent.intent == COMPOSE_READING_INTENT {
             let payload =
@@ -576,6 +644,13 @@ impl<B: Backend> CleromancyApp<B> {
 
 fn invalid_client_token(client_token: Option<&str>, max_bytes: usize) -> bool {
     client_token.is_some_and(|token| token.is_empty() || token.len() > max_bytes)
+}
+
+fn invalid_digest(value: &str) -> bool {
+    value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn rejected(reason: impl Into<String>) -> IntentResult {

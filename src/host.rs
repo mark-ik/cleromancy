@@ -367,6 +367,37 @@ impl<B: Backend> CleromancyHost<B> {
         Ok(stored)
     }
 
+    /// Resolve two saved values into one new pattern occasion. Every input is
+    /// replayed from graph truth before the concurrence node is created.
+    pub fn create_astrology_reading_concurrence(
+        &mut self,
+        astrology_facts_digest: &str,
+        reading_session_id: &str,
+    ) -> Result<Concurrence, HostError> {
+        self.validate_astrology_reading_concurrence_members(
+            astrology_facts_digest,
+            reading_session_id,
+        )?;
+        let concurrence = Concurrence::astrology_reading(
+            unix_time_ms()?,
+            astrology_facts_digest,
+            reading_session_id,
+        )?;
+        self.insert_concurrence(&concurrence)?;
+        Ok(concurrence)
+    }
+
+    pub(crate) fn validate_astrology_reading_concurrence_members(
+        &self,
+        astrology_facts_digest: &str,
+        reading_session_id: &str,
+    ) -> Result<(), HostError> {
+        let facts = self.astrology_facts_for_digest(astrology_facts_digest)?;
+        self.replay_astrology_facts(&facts)?;
+        self.reading_session_for_id(reading_session_id)?;
+        Ok(())
+    }
+
     pub fn insert_reading(
         &mut self,
         context: &ContextSnapshot,
@@ -764,6 +795,19 @@ impl<B: Backend> CleromancyHost<B> {
         Ok(readings)
     }
 
+    /// Resolve one stored reading session and verify all of its replay
+    /// dependencies before returning its exact saved identity.
+    pub fn reading_session_for_id(&self, id: &str) -> Result<ReadingSession, HostError> {
+        let session: ReadingSession = self.stored_facet(
+            &format!("cleromancy://session/{id}"),
+            SESSION_FACET,
+            "session",
+            id,
+        )?;
+        self.replay_session(&session)?;
+        Ok(session)
+    }
+
     pub fn replay_three_card_spread(
         &self,
         spread: &ThreeCardSpread,
@@ -942,7 +986,33 @@ impl<B: Backend> CleromancyHost<B> {
     }
 
     pub(crate) fn intent_was_advertised(&self, instance: InstanceId, intent: &str) -> bool {
-        self.context_for_instance(instance).is_some() && crate::intents::scope_for(intent).is_some()
+        if crate::intents::scope_for(intent).is_none() {
+            return false;
+        }
+        let Some(key) = self.active_instances.get(&instance).copied() else {
+            return false;
+        };
+        if intent == crate::intents::CREATE_CONCURRENCE_INTENT {
+            return self.facet_value(key, ASTROLOGY_FACTS_FACET).is_some()
+                || self.facet_value(key, SESSION_FACET).is_some();
+        }
+        self.facet_value(key, CONTEXT_FACET).is_some()
+    }
+
+    pub(crate) fn concurrence_target_matches(
+        &self,
+        instance: InstanceId,
+        astrology_facts_digest: &str,
+        reading_session_id: &str,
+    ) -> bool {
+        let Some(key) = self.active_instances.get(&instance).copied() else {
+            return false;
+        };
+        let Some(node) = self.graph.get_node(key) else {
+            return false;
+        };
+        node.url() == format!("cleromancy://astrology/facts/{astrology_facts_digest}")
+            || node.url() == format!("cleromancy://session/{reading_session_id}")
     }
 
     fn upsert_node<'a>(
@@ -1116,10 +1186,14 @@ impl<B: Backend> CleromancyHost<B> {
                         label: node.title.clone(),
                         role: SemanticRole::Article,
                         bounds: BoundsRelationship::FillFootprint,
-                        actions: if advertise_intents
-                            && self.facet_value(key, CONTEXT_FACET).is_some()
-                        {
+                        actions: if !advertise_intents {
+                            Vec::new()
+                        } else if self.facet_value(key, CONTEXT_FACET).is_some() {
                             crate::intents::advertised_actions()
+                        } else if self.facet_value(key, ASTROLOGY_FACTS_FACET).is_some()
+                            || self.facet_value(key, SESSION_FACET).is_some()
+                        {
+                            crate::intents::concurrence_actions()
                         } else {
                             Vec::new()
                         },

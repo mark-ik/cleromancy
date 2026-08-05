@@ -104,7 +104,13 @@ fn context_target(snapshot: &ProjectionSnapshot) -> sceno::InstanceId {
                 .offers_for(binding.instance)
                 .unwrap()
                 .iter()
-                .any(|offer| !offer.semantics.actions.is_empty())
+                .any(|offer| {
+                    offer
+                        .semantics
+                        .actions
+                        .iter()
+                        .any(|action| action.intent.0 == THREE_CARD_SPREAD_INTENT)
+                })
         })
         .unwrap()
         .instance

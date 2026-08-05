@@ -357,6 +357,29 @@ cargo run --bin a15_pattern_receipt -- `
 See `design_docs/2026-08-05_a15_pattern_occasion.md` for the concurrence claim
 and stop rule.
 
+## A16
+
+A16 makes the A15 occasion selectable through the bound Graphshell action
+seam. Saved astrology-facts and reading-session cards advertise
+`cleromancy.create-concurrence`. The typed payload names both exact members,
+and the action target must itself be one of them. Cleromancy replays both saved
+values before seeking the dedicated Servitor write scope and adding the
+occasion; an accepted call emits the normal revision notice.
+
+The action is the contract a headed Mere chooser needs. The chooser itself is
+still a host surface, and the resulting card retains the limited “consulted
+together” claim.
+
+```powershell
+cargo test --test a16
+cargo run --bin a16_pattern_selection_receipt -- `
+  receipts/a16-pattern-selection.html `
+  receipts/a16-pattern-selection.json
+```
+
+See `design_docs/2026-08-05_a16_pattern_selection.md` for the target-binding
+and ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.

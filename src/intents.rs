@@ -11,16 +11,19 @@ pub const SELECT_INTENT: &str = "cleromancy.select";
 pub const ROLL_INTENT: &str = "cleromancy.roll";
 pub const THREE_CARD_SPREAD_INTENT: &str = "cleromancy.three-card-spread";
 pub const COMPOSE_READING_INTENT: &str = "cleromancy.compose-reading";
+pub const CREATE_CONCURRENCE_INTENT: &str = "cleromancy.create-concurrence";
 pub const READ_SCHEMA: &str = "cleromancy.intent.read/v1";
 pub const SELECT_SCHEMA: &str = "cleromancy.intent.select/v1";
 pub const ROLL_SCHEMA: &str = "cleromancy.intent.roll/v1";
 pub const THREE_CARD_SPREAD_INTENT_SCHEMA: &str = "cleromancy.intent.three-card-spread/v1";
 pub const COMPOSE_READING_SCHEMA: &str = "cleromancy.intent.compose-reading/v2";
+pub const CREATE_CONCURRENCE_SCHEMA: &str = "cleromancy.intent.create-concurrence/v1";
 pub const READ_SCOPE: &str = "cleromancy/intents/read";
 pub const SELECT_SCOPE: &str = "cleromancy/intents/select";
 pub const ROLL_SCOPE: &str = "cleromancy/intents/roll";
 pub const THREE_CARD_SPREAD_SCOPE: &str = "cleromancy/intents/three-card-spread";
 pub const COMPOSE_READING_SCOPE: &str = "cleromancy/intents/compose-reading";
+pub const CREATE_CONCURRENCE_SCOPE: &str = "cleromancy/intents/create-concurrence";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IntentLimits {
@@ -174,6 +177,30 @@ pub struct ReadingCompositionIntentPayload {
     pub client_token: Option<String>,
 }
 
+/// One explicit pairing selected from saved graph truth. The target card must
+/// name either the supplied facts digest or reading session ID, so a caller
+/// cannot present an unrelated card as the selected occasion member.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AstrologyReadingConcurrenceIntentPayload {
+    pub schema: String,
+    pub astrology_facts_digest: String,
+    pub reading_session_id: String,
+}
+
+impl AstrologyReadingConcurrenceIntentPayload {
+    pub fn new(
+        astrology_facts_digest: impl Into<String>,
+        reading_session_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            schema: CREATE_CONCURRENCE_SCHEMA.to_string(),
+            astrology_facts_digest: astrology_facts_digest.into(),
+            reading_session_id: reading_session_id.into(),
+        }
+    }
+}
+
 impl ReadingCompositionIntentPayload {
     pub fn new(field: Field, layout: CompositionLayout, mode: SelectionMode) -> Self {
         Self {
@@ -286,6 +313,18 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
     ]
 }
 
+pub fn concurrence_actions() -> Vec<AdvertisedAction> {
+    vec![AdvertisedAction {
+        intent: IntentReference(CREATE_CONCURRENCE_INTENT.to_string()),
+        label: "Save pattern occasion".to_string(),
+        explanation:
+            "Pair this saved astrology fact set or reading session with its selected counterpart. The result records only that they were consulted together."
+                .to_string(),
+        payload_schema: CREATE_CONCURRENCE_SCHEMA.to_string(),
+        effect: IntentEffect::DomainTruth,
+    }]
+}
+
 pub(crate) fn scope_for(intent: &str) -> Option<&'static str> {
     match intent {
         READ_INTENT => Some(READ_SCOPE),
@@ -293,6 +332,7 @@ pub(crate) fn scope_for(intent: &str) -> Option<&'static str> {
         ROLL_INTENT => Some(ROLL_SCOPE),
         THREE_CARD_SPREAD_INTENT => Some(THREE_CARD_SPREAD_SCOPE),
         COMPOSE_READING_INTENT => Some(COMPOSE_READING_SCOPE),
+        CREATE_CONCURRENCE_INTENT => Some(CREATE_CONCURRENCE_SCOPE),
         _ => None,
     }
 }

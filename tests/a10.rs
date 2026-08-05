@@ -248,9 +248,13 @@ fn context_target(snapshot: &ProjectionSnapshot) -> sceno::InstanceId {
                 .presentation
                 .offers_for(binding.instance)
                 .is_some_and(|offers| {
-                    offers
-                        .iter()
-                        .any(|offer| !offer.semantics.actions.is_empty())
+                    offers.iter().any(|offer| {
+                        offer
+                            .semantics
+                            .actions
+                            .iter()
+                            .any(|action| action.intent.0 == COMPOSE_READING_INTENT)
+                    })
                 })
         })
         .expect("snapshot advertises commands on its context")
