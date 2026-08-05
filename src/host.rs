@@ -31,9 +31,9 @@ use thiserror::Error;
 
 use crate::moirai::clotho::EntropySource;
 use crate::{
-    AstrologyChart, AstrologyError, AstrologyFacts, ContextSnapshot, Field, Reading, ReadingEngine,
-    ReadingError, ReadingSession, Reflection, SessionError, SpreadError, ThreeCardPosition,
-    ThreeCardRelationKind, ThreeCardSpread,
+    AstrologyChart, AstrologyError, AstrologyFacts, Concurrence, ConcurrenceError, ContextSnapshot,
+    Field, Reading, ReadingEngine, ReadingError, ReadingSession, Reflection, SessionError,
+    SpreadError, ThreeCardPosition, ThreeCardRelationKind, ThreeCardSpread,
 };
 
 pub const HOST_SLOT: &str = "cleromancy/mere-host/v1";
@@ -46,6 +46,7 @@ pub const REFLECTION_FACET: &str = "cleromancy.reflection/v1";
 pub const THREE_CARD_SPREAD_FACET: &str = "cleromancy.three-card-spread/v1";
 pub const ASTROLOGY_CHART_FACET: &str = "cleromancy.astrology-chart/v1";
 pub const ASTROLOGY_FACTS_FACET: &str = "cleromancy.astrology-facts/v1";
+pub const CONCURRENCE_FACET: &str = "cleromancy.concurrence/v1";
 
 #[derive(Debug, Error)]
 pub enum HostError {
@@ -65,6 +66,8 @@ pub enum HostError {
     InvalidStoredFacet { facet: &'static str, reason: String },
     #[error("reading session requires stored {kind} {id}")]
     MissingSessionDependency { kind: &'static str, id: String },
+    #[error("concurrence requires stored member {address}")]
+    MissingConcurrenceMember { address: String },
     #[error("the system clock precedes the Unix epoch")]
     Clock,
     #[error(transparent)]
@@ -73,6 +76,8 @@ pub enum HostError {
     Spread(#[from] SpreadError),
     #[error(transparent)]
     Astrology(#[from] AstrologyError),
+    #[error(transparent)]
+    Concurrence(#[from] ConcurrenceError),
     #[error(transparent)]
     Reading(#[from] ReadingError),
 }
@@ -298,6 +303,68 @@ impl<B: Backend> CleromancyHost<B> {
             });
         }
         Ok(facts)
+    }
+
+    /// Retain a grouping of independently produced graph values. Membership
+    /// records that the values were consulted together; it does not make one
+    /// member provenance for, or an explanation of, another.
+    pub fn insert_concurrence(&mut self, concurrence: &Concurrence) -> Result<NodeKey, HostError> {
+        concurrence.validate()?;
+        let member_keys = concurrence
+            .members
+            .iter()
+            .map(|member| {
+                self.graph
+                    .get_node_by_url(&member.address)
+                    .map(|(key, _)| key)
+                    .ok_or_else(|| HostError::MissingConcurrenceMember {
+                        address: member.address.clone(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let key = self.upsert_node(
+            &format!("cleromancy://concurrence/{}", concurrence.id),
+            "Pattern occasion",
+            ["concurrence", "pattern-occasion"],
+        );
+        self.set_facet(
+            key,
+            CONCURRENCE_FACET,
+            serde_json::to_value(concurrence).unwrap(),
+        )?;
+        for member_key in member_keys {
+            assert_relation(
+                &mut self.graph,
+                key,
+                member_key,
+                EdgeAssertion::Containment {
+                    sub_kind: ContainmentSubKind::CollectionMember,
+                },
+            );
+        }
+        self.changed();
+        Ok(key)
+    }
+
+    pub fn replay_concurrence(&self, concurrence: &Concurrence) -> Result<Concurrence, HostError> {
+        concurrence.validate()?;
+        let stored: Concurrence = self.stored_facet(
+            &format!("cleromancy://concurrence/{}", concurrence.id),
+            CONCURRENCE_FACET,
+            "concurrence",
+            &concurrence.id,
+        )?;
+        if stored != *concurrence {
+            return Err(ConcurrenceError::Invalid("stored value".to_string()).into());
+        }
+        for member in &stored.members {
+            if self.graph.get_node_by_url(&member.address).is_none() {
+                return Err(HostError::MissingConcurrenceMember {
+                    address: member.address.clone(),
+                });
+            }
+        }
+        Ok(stored)
     }
 
     pub fn insert_reading(
@@ -1272,6 +1339,33 @@ impl<B: Backend> CleromancyHost<B> {
                 CardValueV1 {
                     label: "Reflection".to_string(),
                     value: reflection.body,
+                },
+            ]);
+        } else if let Some(value) = self.facet_value(key, CONCURRENCE_FACET)
+            && let Ok(concurrence) = serde_json::from_value::<Concurrence>(value.clone())
+        {
+            values.extend([
+                CardValueV1 {
+                    label: "Label".to_string(),
+                    value: concurrence.label,
+                },
+                CardValueV1 {
+                    label: "Recorded at".to_string(),
+                    value: format!("{} ms since Unix epoch", concurrence.created_at_ms),
+                },
+                CardValueV1 {
+                    label: "Members".to_string(),
+                    value: concurrence
+                        .members
+                        .iter()
+                        .map(|member| format!("{}: {}", member.role, member.address))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+                CardValueV1 {
+                    label: "Claim".to_string(),
+                    value: "Consulted together; no causal or interpretive relation asserted"
+                        .to_string(),
                 },
             ]);
         } else if let Some(value) = self.facet_value(key, ASTROLOGY_CHART_FACET)

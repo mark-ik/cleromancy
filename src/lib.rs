@@ -6,6 +6,7 @@
 pub mod app;
 pub mod astrology;
 pub mod composer;
+pub mod concurrence;
 pub mod context;
 pub mod enrichment;
 pub mod field;
@@ -28,6 +29,10 @@ pub use astrology::{
     AstrologyMoment, AstrologyPlacement, AstrologyPosition, ZodiacSign, calculate_with_adapter,
 };
 pub use composer::{ComposerError, FIELD_COMPOSER_SCHEMA, FieldComposer};
+pub use concurrence::{
+    ASTROLOGY_FACTS_ROLE, CONCURRENCE_SCHEMA, Concurrence, ConcurrenceError, ConcurrenceMember,
+    READING_SESSION_ROLE,
+};
 pub use context::ContextSnapshot;
 pub use enrichment::{
     EnrichmentMatch, EnrichmentReport, EnrichmentSource, EnrichmentValue, ExternalProjection,
@@ -37,7 +42,9 @@ pub use field::{
     CONTEXTUAL_WEIGHT_RULE, Candidate, EXTERNAL_TERM_WEIGHT_RULE, Field, UNIFORM_DIE_RULE,
     UNIFORM_RULE,
 };
-pub use host::{ASTROLOGY_CHART_FACET, ASTROLOGY_FACTS_FACET, CleromancyHost, HostError};
+pub use host::{
+    ASTROLOGY_CHART_FACET, ASTROLOGY_FACTS_FACET, CONCURRENCE_FACET, CleromancyHost, HostError,
+};
 pub use intents::{
     COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA, COMPOSE_READING_SCOPE, CompositionLayout,
     FieldSelection, IntentLimits, READ_INTENT, READ_SCHEMA, READ_SCOPE, ROLL_INTENT, ROLL_SCHEMA,

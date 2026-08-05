@@ -334,6 +334,29 @@ cargo test --test a14
 See `design_docs/2026-08-04_a14_astrology_adapter_graph.md` for the adapter
 and graph ownership boundary.
 
+## A15
+
+A15 saves one cross-system pattern occasion. A `Concurrence` node groups an
+exact astrology facts node with an exact reading session using collection
+membership. It records that the two were consulted together while explicitly
+declining to claim that the astrology caused, qualified, or explained the
+Tarot cast.
+
+The executable proof uses disclosed fixture positions and fixed test entropy,
+then writes an inspectable Graphshell graph and JSON receipt. Production casts
+still use operating-system entropy, and no astrology correspondence is applied
+to Tarot weights.
+
+```powershell
+cargo test --test a15
+cargo run --bin a15_pattern_receipt -- `
+  receipts/a15-pattern.html `
+  receipts/a15-pattern.json
+```
+
+See `design_docs/2026-08-05_a15_pattern_occasion.md` for the concurrence claim
+and stop rule.
+
 ## License
 
 MIT OR Apache-2.0.
