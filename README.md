@@ -420,6 +420,25 @@ cargo test --features graphshell-admission --test a18_admitted_endpoint --offlin
 See `design_docs/2026-08-06_a18_admitted_endpoint.md` for the handoff and
 stop rule.
 
+## A19
+
+A19 gives a resident Graphshell host a local catalog route for Cleromancy. The
+host selects `cleromancy` only after it has admitted a session, hands the
+factory its narrow `AdmittedEndpointContext`, and keeps the retained carrier
+loop outside the product. Cleromancy binds that context to its existing local
+endpoint and Servitor subject; its graph, notices, and write validation remain
+its own.
+
+This is a composition proof, not a browser route or a new transport. The
+catalog route is host configuration, not browser-provided authority.
+
+```powershell
+cargo test --features graphshell-admission --test a19_resident_endpoint_catalog --offline
+```
+
+See `design_docs/2026-08-06_a19_resident_endpoint_catalog.md` for the catalog
+and ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.

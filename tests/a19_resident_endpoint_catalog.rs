@@ -13,6 +13,7 @@ use cleromancy::{
 };
 use graphshell::client::RetainedEndpointSession;
 use graphshell::lifecycle::{AdmittedEndpointContext, BindAdmittedSession};
+use graphshell::native::endpoint_catalog::ResidentEndpointCatalog;
 use graphshell_local::LocalCarrier;
 use graphshell_protocol::{
     CapabilityProfile, IntentResult, PresentationCapability, ProjectionSession,
@@ -20,12 +21,12 @@ use graphshell_protocol::{
 use muniment::MemoryBackend;
 
 #[test]
-fn admitted_context_scopes_cleromancy_to_the_browser_session_and_subject() {
+fn resident_catalog_opens_cleromancy_under_the_admitted_session() {
     let (context, field) = a0_fixture();
     let chart = fixture_chart("2026-08-06T12:00:00Z", 180_000);
     let facts = chart.facts(1_000).unwrap();
     let reading = ReadingEngine::calculate(&context, &field).unwrap();
-    let mut entropy = FixedEntropy::new([0x18, 0x19]);
+    let mut entropy = FixedEntropy::new([0x19, 0x1A]);
     let mut host = CleromancyHost::empty(MemoryBackend::new());
     host.insert_astrology_chart(&chart, 1_000).unwrap();
     let reading_session = host
@@ -34,18 +35,17 @@ fn admitted_context_scopes_cleromancy_to_the_browser_session_and_subject() {
             &field,
             &reading,
             1_786_017_600_000,
-            Some("a18-admitted-session".to_string()),
+            Some("a19-resident-catalog".to_string()),
             &mut entropy,
         )
         .unwrap();
 
     let admitted = AdmittedEndpointContext::new(
-        ProjectionSession("admitted:cleromancy-a18".to_string()),
-        [0x18; 32],
+        ProjectionSession("admitted:cleromancy-a19".to_string()),
+        [0x19; 32],
     );
     let subject = Subject::new(admitted.subject());
-    let mut app = CleromancyApp::new(host).bind_admitted_session(&admitted);
-    assert_eq!(app.host.session(), admitted.session().clone());
+    let mut app = CleromancyApp::new(host);
     app.servitors_mut()
         .grant(Grant::new(
             subject,
@@ -53,10 +53,20 @@ fn admitted_context_scopes_cleromancy_to_the_browser_session_and_subject() {
             Mode::Write,
         ))
         .unwrap();
+    let mut app = Some(app);
+    let mut catalog = ResidentEndpointCatalog::new();
+    catalog
+        .register_notifying("cleromancy", "Local Cleromancy readings", move |context| {
+            app.take()
+                .map(|app| app.bind_admitted_session(context))
+                .ok_or_else(|| "the one-session fixture is already open".to_string())
+        })
+        .unwrap();
+    let endpoint = catalog.open("cleromancy", &admitted).unwrap();
 
     let mut retained = RetainedEndpointSession::over(
-        Box::new(LocalCarrier::new(app, |_, _| {
-            Err("A18 requests a fresh snapshot after a write".to_string())
+        Box::new(LocalCarrier::new(endpoint, |_, _| {
+            Err("A19 requests a fresh snapshot after a write".to_string())
         })),
         CapabilityProfile::new([PresentationCapability::PortableCard]),
     )
@@ -75,7 +85,7 @@ fn admitted_context_scopes_cleromancy_to_the_browser_session_and_subject() {
                 .find(|action| action.intent.0 == CREATE_CONCURRENCE_INTENT)
                 .map(|action| (item.instance, action))
         })
-        .expect("the bound subject sees the concurrency action");
+        .expect("the catalog-bound subject sees the concurrence action");
     let (mut draft, invocation) = retained
         .open_action_draft(&session, target, &action.intent.0)
         .unwrap();

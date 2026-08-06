@@ -9,7 +9,7 @@ use cleromancy::{
     a0_fixture, AstrologyChart, AstrologyMoment, AstrologyPosition, CleromancyApp, CleromancyHost,
     ReadingEngine, ReadingError, CREATE_CONCURRENCE_INTENT,
 };
-use graphshell::sessions::RetainedEndpointSession;
+use graphshell::client::RetainedEndpointSession;
 use graphshell_local::LocalCarrier;
 use graphshell_protocol::{CapabilityProfile, IntentResult, PresentationCapability};
 use muniment::MemoryBackend;
