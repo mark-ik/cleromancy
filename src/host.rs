@@ -94,6 +94,7 @@ struct PersistedHost {
 /// slot and projected through Graphshell's endpoint vocabulary.
 pub struct CleromancyHost<B> {
     slots: JsonSlots<B>,
+    projection_session: ProjectionSession,
     pub(crate) graph: Graph,
     pub(crate) projection_epoch: u64,
     pub(crate) projection_revision: u64,
@@ -108,6 +109,7 @@ impl<B: Backend> CleromancyHost<B> {
     pub fn empty(backend: B) -> Self {
         Self {
             slots: JsonSlots::new(backend),
+            projection_session: ProjectionSession(LOCAL_SESSION.to_string()),
             graph: Graph::new(),
             projection_epoch: 1,
             projection_revision: 1,
@@ -124,6 +126,7 @@ impl<B: Backend> CleromancyHost<B> {
         let Some(saved): Option<PersistedHost> = slots.load(HOST_SLOT).await? else {
             return Ok(Self {
                 slots,
+                projection_session: ProjectionSession(LOCAL_SESSION.to_string()),
                 graph: Graph::new(),
                 projection_epoch: 1,
                 projection_revision: 1,
@@ -139,6 +142,7 @@ impl<B: Backend> CleromancyHost<B> {
         graph.overlay_facets(saved.facets);
         Ok(Self {
             slots,
+            projection_session: ProjectionSession(LOCAL_SESSION.to_string()),
             graph,
             projection_epoch: saved.projection_epoch,
             projection_revision: saved.projection_revision,
@@ -185,7 +189,17 @@ impl<B: Backend> CleromancyHost<B> {
     }
 
     pub fn session(&self) -> ProjectionSession {
-        ProjectionSession(LOCAL_SESSION.to_string())
+        self.projection_session.clone()
+    }
+
+    /// Rebind this in-memory endpoint before it serves an already-admitted
+    /// Graphshell session. The durable reading graph stays local; the session
+    /// name and all disclosed resources are per connection.
+    pub(crate) fn bind_projection_session(&mut self, session: ProjectionSession) {
+        self.projection_session = session;
+        self.resources.clear();
+        self.active_instances.clear();
+        self.last_snapshot = None;
     }
 
     pub fn local_request(&self) -> ProjectionRequest {

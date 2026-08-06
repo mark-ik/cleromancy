@@ -3,6 +3,8 @@
 
 //! Context-qualified deterministic and cleromantic readings over a Mere graph.
 
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+mod admitted;
 pub mod app;
 pub mod astrology;
 pub mod composer;

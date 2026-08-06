@@ -399,6 +399,27 @@ cargo test --test a17_graphshell_action_draft --offline
 See `design_docs/2026-08-06_a17_retained_graphshell_action_draft.md` for the
 carrier and ownership boundary.
 
+## A18
+
+A18 gives Cleromancy an opt-in adapter for a Graphshell session that the
+containing host has already admitted. `AdmittedEndpointContext` supplies the
+transcript-derived projection session and public-key subject. Cleromancy binds
+its in-memory endpoint to that session and maps the subject to Servitor before
+it advertises a write action. The reading graph and persistent local storage
+remain Cleromancy's own.
+
+The context is an in-process handoff, not a portable authentication token. The
+surrounding Graphshell session loop still owns admission, expiry, revocation,
+and browser transport. A resident endpoint catalog and actual browser routing
+remain the next composition gate.
+
+```powershell
+cargo test --features graphshell-admission --test a18_admitted_endpoint --offline
+```
+
+See `design_docs/2026-08-06_a18_admitted_endpoint.md` for the handoff and
+stop rule.
+
 ## License
 
 MIT OR Apache-2.0.
