@@ -383,6 +383,22 @@ cargo run --bin a16_pattern_selection_receipt -- `
 See `design_docs/2026-08-05_a16_pattern_selection.md` for the target-binding
 and ownership boundary.
 
+## A17
+
+A17 proves the same bounded action through Graphshell's carrier-neutral
+retained session. Cleromancy is mounted through its real wire-round-tripping
+`LocalCarrier`; Graphshell opens the advertised form from the semantic tree,
+submits exact endpoint choices, then resnapshots and finds the saved Pattern
+occasion card. This is an integration proof, not a new Cleromancy form or a
+browser transport.
+
+```powershell
+cargo test --test a17_graphshell_action_draft --offline
+```
+
+See `design_docs/2026-08-06_a17_retained_graphshell_action_draft.md` for the
+carrier and ownership boundary.
+
 ## License
 
 MIT OR Apache-2.0.
