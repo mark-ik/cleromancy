@@ -6,10 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chartulary::{FacetError, FacetId};
 use graphshell_protocol::{
-    BoundsRelationship, CachePolicy, CardValueV1, ContentHash, PortableCardV1, PresentationBinding,
-    PresentationCapability, PresentationCodec, PresentationKey, PresentationManifest,
-    PresentationOffer, PresentationSemantics, ProjectionRequest, ProjectionSession,
-    ProjectionSnapshot, ProtocolVersion, SemanticRole,
+    ActionFormChoiceV1, BoundsRelationship, CachePolicy, CardValueV1, ContentHash, PortableCardV1,
+    PresentationBinding, PresentationCapability, PresentationCodec, PresentationKey,
+    PresentationManifest, PresentationOffer, PresentationSemantics, ProjectionRequest,
+    ProjectionSession, ProjectionSnapshot, ProtocolVersion, SemanticRole,
 };
 use mere::kernel::geometry::PortablePoint;
 use mere::kernel::graph::apply::{GraphDelta, add_node, apply_graph_delta, assert_relation};
@@ -993,10 +993,74 @@ impl<B: Backend> CleromancyHost<B> {
             return false;
         };
         if intent == crate::intents::CREATE_CONCURRENCE_INTENT {
-            return self.facet_value(key, ASTROLOGY_FACTS_FACET).is_some()
-                || self.facet_value(key, SESSION_FACET).is_some();
+            let forms_are_available = self
+                .concurrence_form_choices()
+                .map(|(facts, sessions)| !facts.is_empty() && !sessions.is_empty())
+                .unwrap_or(false);
+            return forms_are_available
+                && (self.facet_value(key, ASTROLOGY_FACTS_FACET).is_some()
+                    || self.facet_value(key, SESSION_FACET).is_some());
         }
         self.facet_value(key, CONTEXT_FACET).is_some()
+    }
+
+    /// Offer only exact saved values that replay against graph truth. The
+    /// action form does not encode a correspondence or choose a counterpart:
+    /// it makes both member identities an explicit, bounded host selection.
+    fn concurrence_form_choices(
+        &self,
+    ) -> Result<(Vec<ActionFormChoiceV1>, Vec<ActionFormChoiceV1>), HostError> {
+        let mut facts_choices = Vec::new();
+        let mut session_choices = Vec::new();
+        for (key, _) in self.graph.nodes() {
+            if let Some(value) = self.facet_value(key, ASTROLOGY_FACTS_FACET) {
+                let facts =
+                    serde_json::from_value::<AstrologyFacts>(value.clone()).map_err(|error| {
+                        HostError::InvalidStoredFacet {
+                            facet: ASTROLOGY_FACTS_FACET,
+                            reason: error.to_string(),
+                        }
+                    })?;
+                let facts = self.replay_astrology_facts(&facts)?;
+                let digest = facts.digest();
+                facts_choices.push(
+                    ActionFormChoiceV1::new(
+                        digest.clone(),
+                        format!("Astrology facts {}", short_identity(&digest)),
+                    )
+                    .with_description(format!(
+                        "{} · {} placements · {} aspects",
+                        facts.algorithm,
+                        facts.placements.len(),
+                        facts.aspects.len()
+                    )),
+                );
+            }
+            if let Some(value) = self.facet_value(key, SESSION_FACET) {
+                let session =
+                    serde_json::from_value::<ReadingSession>(value.clone()).map_err(|error| {
+                        HostError::InvalidStoredFacet {
+                            facet: SESSION_FACET,
+                            reason: error.to_string(),
+                        }
+                    })?;
+                self.replay_session(&session)?;
+                session_choices.push(
+                    ActionFormChoiceV1::new(
+                        session.id.clone(),
+                        format!("Reading session {}", short_identity(&session.id)),
+                    )
+                    .with_description(format!(
+                        "{} placement(s) · recorded {} ms since Unix epoch",
+                        session.placements.len(),
+                        session.created_at_ms
+                    )),
+                );
+            }
+        }
+        facts_choices.sort_by(|left, right| left.value.cmp(&right.value));
+        session_choices.sort_by(|left, right| left.value.cmp(&right.value));
+        Ok((facts_choices, session_choices))
     }
 
     pub(crate) fn concurrence_target_matches(
@@ -1095,6 +1159,11 @@ impl<B: Backend> CleromancyHost<B> {
         &mut self,
         advertise_intents: bool,
     ) -> Result<ProjectionSnapshot, HostError> {
+        let (concurrence_facts, concurrence_sessions) = if advertise_intents {
+            self.concurrence_form_choices()?
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let mut layout = mere::canvas::project_canvas_strategy_with_score(
             "phyllotaxis.default",
             &self.graph,
@@ -1193,7 +1262,10 @@ impl<B: Backend> CleromancyHost<B> {
                         } else if self.facet_value(key, ASTROLOGY_FACTS_FACET).is_some()
                             || self.facet_value(key, SESSION_FACET).is_some()
                         {
-                            crate::intents::concurrence_actions()
+                            crate::intents::concurrence_actions(
+                                &concurrence_facts,
+                                &concurrence_sessions,
+                            )
                         } else {
                             Vec::new()
                         },
@@ -1599,6 +1671,10 @@ fn event_nonce(entropy: &mut impl EntropySource) -> Result<String, HostError> {
     let high = entropy.next_u64()?;
     let low = entropy.next_u64()?;
     Ok(format!("{high:016x}{low:016x}"))
+}
+
+fn short_identity(value: &str) -> String {
+    value.chars().take(12).collect()
 }
 
 fn unix_time_ms() -> Result<u64, HostError> {

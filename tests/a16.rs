@@ -1,7 +1,7 @@
 // Copyright 2026 Mark AB (markik)
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use cleromancy::moirai::clotho::EntropySource;
 use cleromancy::servitor::{Cap, Grant, Mode, Subject};
@@ -12,8 +12,8 @@ use cleromancy::{
 };
 use graphshell_local::LocalCarrier;
 use graphshell_protocol::{
-    Carrier, CarrierRequestBody, CarrierResponseBody, IntentInvocation, IntentResult,
-    PortableCardV1, ProjectionSnapshot, ResourceRequest,
+    ActionFormError, AdvertisedAction, Carrier, CarrierRequestBody, CarrierResponseBody,
+    IntentInvocation, IntentResult, PortableCardV1, ProjectionSnapshot, ResourceRequest,
 };
 use muniment::MemoryBackend;
 
@@ -79,30 +79,59 @@ fn saved_facts_and_sessions_select_each_other_through_the_bound_pattern_action()
         context_target,
         CREATE_CONCURRENCE_INTENT
     ));
+    let facts_action = action_for(&first, facts_target, CREATE_CONCURRENCE_INTENT);
+    let session_action = action_for(&first, session_target, CREATE_CONCURRENCE_INTENT);
+    let mut expected_facts = vec![first_facts.digest(), second_facts.digest()];
+    expected_facts.sort();
+    let expected_sessions = vec![session.id.clone()];
+    assert_concurrence_form(&facts_action, &expected_facts, &expected_sessions);
+    assert_eq!(facts_action, session_action);
+    assert_eq!(
+        facts_action.compose_payload(&BTreeMap::from([
+            (
+                "astrology_facts_digest".to_string(),
+                "not-advertised".to_string()
+            ),
+            ("reading_session_id".to_string(), session.id.clone()),
+        ])),
+        Err(ActionFormError::InvalidChoice {
+            field: "astrology_facts_digest".to_string(),
+            value: "not-advertised".to_string(),
+        })
+    );
 
     let node_count = carrier.endpoint().host.graph().nodes().count();
+    let mismatched_payload = facts_action
+        .compose_payload(&BTreeMap::from([
+            ("astrology_facts_digest".to_string(), second_facts.digest()),
+            ("reading_session_id".to_string(), session.id.clone()),
+        ]))
+        .unwrap();
     assert!(matches!(
         request_intent(
             &mut carrier,
-            invocation(
-                &first,
-                facts_target,
-                &AstrologyReadingConcurrenceIntentPayload::new(second_facts.digest(), &session.id),
-            ),
+            invocation(&first, facts_target, mismatched_payload),
         ),
         IntentResult::Rejected { reason } if reason.contains("not one selected member")
     ));
     assert!(carrier.take_notice().is_none());
     assert_eq!(carrier.endpoint().host.graph().nodes().count(), node_count);
 
+    let selected_payload = session_action
+        .compose_payload(&BTreeMap::from([
+            ("astrology_facts_digest".to_string(), first_facts.digest()),
+            ("reading_session_id".to_string(), session.id.clone()),
+        ]))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<AstrologyReadingConcurrenceIntentPayload>(&selected_payload)
+            .unwrap(),
+        AstrologyReadingConcurrenceIntentPayload::new(first_facts.digest(), &session.id)
+    );
     assert_eq!(
         request_intent(
             &mut carrier,
-            invocation(
-                &first,
-                session_target,
-                &AstrologyReadingConcurrenceIntentPayload::new(first_facts.digest(), &session.id),
-            ),
+            invocation(&first, session_target, selected_payload),
         ),
         IntentResult::Accepted
     );
@@ -202,10 +231,52 @@ fn advertises(snapshot: &ProjectionSnapshot, target: sceno::InstanceId, intent: 
         .any(|action| action.intent.0 == intent)
 }
 
+fn action_for(
+    snapshot: &ProjectionSnapshot,
+    target: sceno::InstanceId,
+    intent: &str,
+) -> AdvertisedAction {
+    snapshot
+        .presentation
+        .offers_for(target)
+        .into_iter()
+        .flatten()
+        .flat_map(|offer| &offer.semantics.actions)
+        .find(|action| action.intent.0 == intent)
+        .cloned()
+        .expect("target advertises the requested action")
+}
+
+fn assert_concurrence_form(action: &AdvertisedAction, facts: &[String], sessions: &[String]) {
+    let form = action.input_form.as_ref().expect("bounded action form");
+    assert_eq!(form.schema, cleromancy::CREATE_CONCURRENCE_SCHEMA);
+    assert_eq!(form.fields.len(), 2);
+    assert_eq!(form.fields[0].name, "astrology_facts_digest");
+    assert_eq!(form.fields[0].label, "Astrology facts");
+    assert_eq!(
+        form.fields[0]
+            .choices
+            .iter()
+            .map(|choice| choice.value.clone())
+            .collect::<Vec<_>>(),
+        facts
+    );
+    assert_eq!(form.fields[1].name, "reading_session_id");
+    assert_eq!(form.fields[1].label, "Reading session");
+    assert_eq!(
+        form.fields[1]
+            .choices
+            .iter()
+            .map(|choice| choice.value.clone())
+            .collect::<Vec<_>>(),
+        sessions
+    );
+}
+
 fn invocation(
     snapshot: &ProjectionSnapshot,
     target: sceno::InstanceId,
-    payload: &AstrologyReadingConcurrenceIntentPayload,
+    payload: Vec<u8>,
 ) -> IntentInvocation {
     IntentInvocation {
         session: snapshot.session.clone(),
@@ -213,7 +284,7 @@ fn invocation(
         observed_epoch: snapshot.scene.epoch,
         observed_revision: snapshot.scene.revision,
         intent: CREATE_CONCURRENCE_INTENT.to_string(),
-        payload: serde_json::to_vec(payload).unwrap(),
+        payload,
     }
 }
 

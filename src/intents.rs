@@ -1,7 +1,10 @@
 // Copyright 2026 Mark AB (markik)
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use graphshell_protocol::{AdvertisedAction, IntentEffect, IntentReference};
+use graphshell_protocol::{
+    ActionFormChoiceV1, ActionFormFieldV1, ActionFormV1, AdvertisedAction, IntentEffect,
+    IntentReference,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{Candidate, Field, SealedEnrichment, SelectionMode, UNIFORM_DIE_RULE};
@@ -274,6 +277,7 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
             explanation: "Apply the declared qualifier and append a replayable reading."
                 .to_string(),
             payload_schema: READ_SCHEMA.to_string(),
+            input_form: None,
             effect: IntentEffect::DomainTruth,
         },
         AdvertisedAction {
@@ -282,6 +286,7 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
             explanation: "Cast across the qualified field and append its bounded sample receipt."
                 .to_string(),
             payload_schema: SELECT_SCHEMA.to_string(),
+            input_form: None,
             effect: IntentEffect::DomainTruth,
         },
         AdvertisedAction {
@@ -290,6 +295,7 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
             explanation: "Cast one uniformly weighted die and append the replayable result."
                 .to_string(),
             payload_schema: ROLL_SCHEMA.to_string(),
+            input_form: None,
             effect: IntentEffect::DomainTruth,
         },
         AdvertisedAction {
@@ -299,6 +305,7 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
                 "Cast foundation, tension, and next step, then append their replayable graph frame."
                     .to_string(),
             payload_schema: THREE_CARD_SPREAD_INTENT_SCHEMA.to_string(),
+            input_form: None,
             effect: IntentEffect::DomainTruth,
         },
         AdvertisedAction {
@@ -308,12 +315,22 @@ pub fn advertised_actions() -> Vec<AdvertisedAction> {
                 "Choose an explicit field, layout, and deterministic or cast mode; the selected composition is saved with its workings."
                     .to_string(),
             payload_schema: COMPOSE_READING_SCHEMA.to_string(),
+            input_form: None,
             effect: IntentEffect::DomainTruth,
         },
     ]
 }
 
-pub fn concurrence_actions() -> Vec<AdvertisedAction> {
+/// Advertise the saved, replayed values an endpoint will accept for an A16
+/// pattern occasion. Values are exact graph identities; labels only help a
+/// host present the choices without reconstructing application truth.
+pub fn concurrence_actions(
+    astrology_facts: &[ActionFormChoiceV1],
+    reading_sessions: &[ActionFormChoiceV1],
+) -> Vec<AdvertisedAction> {
+    if astrology_facts.is_empty() || reading_sessions.is_empty() {
+        return Vec::new();
+    }
     vec![AdvertisedAction {
         intent: IntentReference(CREATE_CONCURRENCE_INTENT.to_string()),
         label: "Save pattern occasion".to_string(),
@@ -321,6 +338,29 @@ pub fn concurrence_actions() -> Vec<AdvertisedAction> {
             "Pair this saved astrology fact set or reading session with its selected counterpart. The result records only that they were consulted together."
                 .to_string(),
         payload_schema: CREATE_CONCURRENCE_SCHEMA.to_string(),
+        input_form: Some(
+            ActionFormV1::new(CREATE_CONCURRENCE_SCHEMA)
+                .with_field(
+                    ActionFormFieldV1::choice(
+                        "astrology_facts_digest",
+                        "Astrology facts",
+                        astrology_facts.iter().cloned(),
+                    )
+                    .with_description(
+                        "Choose one saved, replayed astrology fact set by its endpoint label.",
+                    ),
+                )
+                .with_field(
+                    ActionFormFieldV1::choice(
+                        "reading_session_id",
+                        "Reading session",
+                        reading_sessions.iter().cloned(),
+                    )
+                    .with_description(
+                        "Choose one saved, replayed reading session by its endpoint label.",
+                    ),
+                ),
+        ),
         effect: IntentEffect::DomainTruth,
     }]
 }

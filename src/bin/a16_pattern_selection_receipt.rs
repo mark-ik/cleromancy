@@ -1,7 +1,7 @@
 // Copyright 2026 Mark AB (markik)
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use cleromancy::moirai::clotho::EntropySource;
@@ -86,7 +86,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &first,
         &format!("cleromancy://astrology/facts/{}", facts.digest()),
     )?;
-    let payload = AstrologyReadingConcurrenceIntentPayload::new(facts.digest(), &session.id);
+    let action = action_for(&first, selection_target, CREATE_CONCURRENCE_INTENT)?;
+    let payload_bytes = action.compose_payload(&BTreeMap::from([
+        ("astrology_facts_digest".to_string(), facts.digest()),
+        ("reading_session_id".to_string(), session.id.clone()),
+    ]))?;
+    let payload =
+        serde_json::from_slice::<AstrologyReadingConcurrenceIntentPayload>(&payload_bytes)?;
     let result = request_intent(
         &mut carrier,
         IntentInvocation {
@@ -95,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             observed_epoch: first.scene.epoch,
             observed_revision: first.scene.revision,
             intent: CREATE_CONCURRENCE_INTENT.to_string(),
-            payload: serde_json::to_vec(&payload)?,
+            payload: payload_bytes,
         },
     )?;
     if result != IntentResult::Accepted || carrier.take_notice().is_none() {
@@ -186,6 +192,22 @@ fn target_for_address(
         }
     }
     Err(format!("no portable card for {address}").into())
+}
+
+fn action_for(
+    snapshot: &ProjectionSnapshot,
+    target: sceno::InstanceId,
+    intent: &str,
+) -> Result<graphshell_protocol::AdvertisedAction, Box<dyn std::error::Error>> {
+    snapshot
+        .presentation
+        .offers_for(target)
+        .into_iter()
+        .flatten()
+        .flat_map(|offer| &offer.semantics.actions)
+        .find(|action| action.intent.0 == intent)
+        .cloned()
+        .ok_or_else(|| format!("target does not advertise {intent}").into())
 }
 
 fn request_intent(

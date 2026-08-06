@@ -361,10 +361,13 @@ and stop rule.
 
 A16 makes the A15 occasion selectable through the bound Graphshell action
 seam. Saved astrology-facts and reading-session cards advertise
-`cleromancy.create-concurrence`. The typed payload names both exact members,
-and the action target must itself be one of them. Cleromancy replays both saved
-values before seeking the dedicated Servitor write scope and adding the
-occasion; an accepted call emits the normal revision notice.
+`cleromancy.create-concurrence` only when both replayed saved-value sets exist.
+The advertised form supplies the exact astrology-facts and reading-session
+values the endpoint accepts, with no host default or free-text ID entry. Its
+typed payload names both exact members, and the action target must itself be
+one of them. Cleromancy replays both saved values before seeking the dedicated
+Servitor write scope and adding the occasion; an accepted call emits the normal
+revision notice.
 
 The action is the contract a headed Mere chooser needs. The chooser itself is
 still a host surface, and the resulting card retains the limited “consulted
