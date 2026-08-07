@@ -439,6 +439,26 @@ cargo test --features graphshell-admission --test a19_resident_endpoint_catalog 
 See `design_docs/2026-08-06_a19_resident_endpoint_catalog.md` for the catalog
 and ownership boundary.
 
+## A20
+
+A20 lets one resident Cleromancy authority serve concurrent admitted sessions.
+The authority retains the durable graph and Servitor state, while the catalog
+opens a fresh endpoint for every session. Projection resources, scene action
+targets, subject, and revision bell remain local to that endpoint. A write in
+one admitted session advances the shared graph and rings every already-mounted
+reader under that reader's own session name.
+
+The existing explicit persistence operation remains the persistence boundary:
+this gate shares live local truth, rather than adding automatic saving or peer
+transport.
+
+```powershell
+cargo test --features graphshell-admission --test a20_resident_session_authority --offline
+```
+
+See `design_docs/2026-08-07_a20_resident_session_authority.md` for the state
+split, notification rule, and stop boundary.
+
 ## License
 
 MIT OR Apache-2.0.

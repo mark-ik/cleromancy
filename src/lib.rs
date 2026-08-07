@@ -25,6 +25,8 @@ pub mod sync;
 pub mod tarot;
 
 pub use app::{AppError, CleromancyApp};
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+pub use admitted::{CleromancySessionAuthority, CleromancySessionEndpoint};
 pub use astrology::{
     ASTROLOGY_CHART_SCHEMA, ASTROLOGY_FACTS_ALGORITHM, ASTROLOGY_FACTS_SCHEMA, AspectKind,
     AstrologyAdapter, AstrologyAspect, AstrologyChart, AstrologyError, AstrologyFacts,

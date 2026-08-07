@@ -48,6 +48,32 @@ pub const ASTROLOGY_CHART_FACET: &str = "cleromancy.astrology-chart/v1";
 pub const ASTROLOGY_FACTS_FACET: &str = "cleromancy.astrology-facts/v1";
 pub const CONCURRENCE_FACET: &str = "cleromancy.concurrence/v1";
 
+/// State that belongs to one projection connection rather than Cleromancy's
+/// saved reading graph.
+///
+/// A resident authority keeps one durable [`CleromancyHost`] and gives every
+/// admitted endpoint one of these states. Resources and scene instances must
+/// not leak from one peer into another peer's session.
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+pub(crate) struct CleromancyProjectionState {
+    projection_session: ProjectionSession,
+    resources: BTreeMap<ContentHash, Vec<u8>>,
+    active_instances: HashMap<InstanceId, NodeKey>,
+    last_snapshot: Option<(SceneEpoch, Revision)>,
+}
+
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+impl CleromancyProjectionState {
+    pub(crate) fn for_session(projection_session: ProjectionSession) -> Self {
+        Self {
+            projection_session,
+            resources: BTreeMap::new(),
+            active_instances: HashMap::new(),
+            last_snapshot: None,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum HostError {
     #[error("Cleromancy storage: {0}")]
@@ -192,9 +218,26 @@ impl<B: Backend> CleromancyHost<B> {
         self.projection_session.clone()
     }
 
+    #[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+    pub(crate) fn swap_projection_state(&mut self, state: &mut CleromancyProjectionState) {
+        std::mem::swap(&mut self.projection_session, &mut state.projection_session);
+        std::mem::swap(&mut self.resources, &mut state.resources);
+        std::mem::swap(&mut self.active_instances, &mut state.active_instances);
+        std::mem::swap(&mut self.last_snapshot, &mut state.last_snapshot);
+    }
+
+    #[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+    pub(crate) fn current_projection_revision(&self) -> (SceneEpoch, Revision) {
+        (
+            SceneEpoch(self.projection_epoch),
+            Revision(self.projection_revision),
+        )
+    }
+
     /// Rebind this in-memory endpoint before it serves an already-admitted
     /// Graphshell session. The durable reading graph stays local; the session
     /// name and all disclosed resources are per connection.
+    #[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
     pub(crate) fn bind_projection_session(&mut self, session: ProjectionSession) {
         self.projection_session = session;
         self.resources.clear();
@@ -961,6 +1004,16 @@ impl<B: Backend> CleromancyHost<B> {
                 Revision(self.projection_revision),
             )
         })
+    }
+
+    /// The concrete revision this projection session last rendered.
+    ///
+    /// Unlike [`Self::active_revision`], this does not follow later durable
+    /// graph changes. Resident endpoints use it to decide whether another
+    /// admitted session advanced their view.
+    #[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+    pub(crate) fn last_snapshot_revision(&self) -> Option<(SceneEpoch, Revision)> {
+        self.last_snapshot
     }
 
     pub(crate) fn context_for_instance(&self, instance: InstanceId) -> Option<ContextSnapshot> {

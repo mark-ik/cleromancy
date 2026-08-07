@@ -14,6 +14,8 @@ use servitor::Subject;
 use thiserror::Error;
 
 use crate::enrichment::{EnrichmentError, EnrichmentReport, ExternalProjection, mount_carrier};
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+use crate::host::CleromancyProjectionState;
 use crate::intents::{
     AstrologyReadingConcurrenceIntentPayload, COMPOSE_READING_INTENT, COMPOSE_READING_SCHEMA,
     CREATE_CONCURRENCE_INTENT, CREATE_CONCURRENCE_SCHEMA, CompositionLayout, FieldSelection,
@@ -49,6 +51,32 @@ pub struct CleromancyApp<B> {
     pending_notice: bool,
 }
 
+/// The connection-local half of a [`CleromancyApp`].
+///
+/// A resident authority owns the reading graph, Servitor table, and intent
+/// limits once. Every admitted endpoint carries one of these instead, so its
+/// session, action targets, and revision bell cannot overwrite another peer's.
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+pub(crate) struct CleromancyAppSessionState {
+    projection: CleromancyProjectionState,
+    intent_subject: Option<Subject>,
+    pending_notice: bool,
+}
+
+#[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+impl CleromancyAppSessionState {
+    pub(crate) fn admitted(
+        session: graphshell_protocol::ProjectionSession,
+        subject: Subject,
+    ) -> Self {
+        Self {
+            projection: CleromancyProjectionState::for_session(session),
+            intent_subject: Some(subject),
+            pending_notice: false,
+        }
+    }
+}
+
 impl<B: Backend> CleromancyApp<B> {
     pub fn new(host: CleromancyHost<B>) -> Self {
         Self {
@@ -59,6 +87,26 @@ impl<B: Backend> CleromancyApp<B> {
             intent_limits: IntentLimits::default(),
             pending_notice: false,
         }
+    }
+
+    /// Run one resident endpoint operation with that endpoint's local state.
+    ///
+    /// The swaps keep the existing local-app API intact while the resident
+    /// authority serializes access to the shared graph and Servitor audit.
+    #[cfg(all(feature = "graphshell-admission", not(target_arch = "wasm32")))]
+    pub(crate) fn with_session_state<R>(
+        &mut self,
+        state: &mut CleromancyAppSessionState,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.host.swap_projection_state(&mut state.projection);
+        std::mem::swap(&mut self.intent_subject, &mut state.intent_subject);
+        std::mem::swap(&mut self.pending_notice, &mut state.pending_notice);
+        let result = operation(self);
+        std::mem::swap(&mut self.intent_subject, &mut state.intent_subject);
+        std::mem::swap(&mut self.pending_notice, &mut state.pending_notice);
+        self.host.swap_projection_state(&mut state.projection);
+        result
     }
 
     pub fn client(&self) -> &ClientState {
