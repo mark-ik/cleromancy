@@ -43,9 +43,15 @@ pub struct FixtureCarrier {
 }
 
 impl Carrier for FixtureCarrier {
-    fn request(&mut self, body: CarrierRequestBody) -> Result<CarrierResponseBody, String> {
+    fn request(
+        &mut self,
+        body: CarrierRequestBody,
+    ) -> Result<CarrierResponseBody, graphshell_protocol::CarrierError> {
         if self.closed {
-            return Err("fixture carrier is closed".to_string());
+            // A closed carrier is gone, not declining.
+            return Err(graphshell_protocol::CarrierError::Disconnected(
+                "fixture carrier is closed".to_string(),
+            ));
         }
         match body {
             CarrierRequestBody::Discover => {
@@ -68,7 +74,9 @@ impl Carrier for FixtureCarrier {
                 let mut snapshot = self
                     .host
                     .snapshot(local)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| {
+                        graphshell_protocol::CarrierError::Refused(error.to_string())
+                    })?;
                 snapshot.session = self.session.clone();
                 Ok(CarrierResponseBody::Snapshot(Box::new(snapshot)))
             }
@@ -79,7 +87,9 @@ impl Carrier for FixtureCarrier {
                         session: self.host.session(),
                         resource: request.resource,
                     })
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| {
+                        graphshell_protocol::CarrierError::Refused(error.to_string())
+                    })?;
                 Ok(CarrierResponseBody::Resource(
                     graphshell_protocol::ResourceResponse {
                         session: self.session.clone(),
@@ -92,7 +102,9 @@ impl Carrier for FixtureCarrier {
                 self.closed = true;
                 Ok(CarrierResponseBody::Closed)
             }
-            _ => Err("fixture carrier refused the request".to_string()),
+            _ => Err(graphshell_protocol::CarrierError::Refused(
+                "fixture carrier refused the request".to_string(),
+            )),
         }
     }
 
@@ -100,11 +112,15 @@ impl Carrier for FixtureCarrier {
         None
     }
 
-    fn wait_for_notice(&mut self) -> Result<graphshell_protocol::CarrierNotice, String> {
-        Err("fixture emits no notices".to_string())
+    fn wait_for_notice(
+        &mut self,
+    ) -> Result<graphshell_protocol::CarrierNotice, graphshell_protocol::CarrierError> {
+        Err(graphshell_protocol::CarrierError::Refused(
+            "fixture emits no notices".to_string(),
+        ))
     }
 
-    fn shutdown(&mut self) -> Result<(), String> {
+    fn shutdown(&mut self) -> Result<(), graphshell_protocol::CarrierError> {
         self.closed = true;
         Ok(())
     }

@@ -7,8 +7,8 @@ use graphshell_client::{
     ClientState, PresentationResolution, ResolvedContent, ResolvedPresentation,
 };
 use graphshell_protocol::{
-    CapabilityProfile, Carrier, CarrierRequestBody, CarrierResponseBody, PresentationCapability,
-    ProjectionSession, ResourceRequest,
+    CapabilityProfile, Carrier, CarrierError, CarrierRequestBody, CarrierResponseBody,
+    PresentationCapability, ProjectionSession, ResourceRequest,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -22,8 +22,13 @@ pub const REPORT_SCHEMA: &str = "cleromancy.enrichment-report/v2";
 
 #[derive(Debug, Error)]
 pub enum EnrichmentError {
+    /// Carries the carrier's own error rather than flattening it to a
+    /// message, so a caller can tell an endpoint that declined from one that
+    /// is no longer there. Enrichment is a fetch against someone else's
+    /// endpoint, and those two want different responses: the first is an
+    /// answer, the second means stop asking.
     #[error("external Graphshell carrier: {0}")]
-    Carrier(String),
+    Carrier(CarrierError),
     #[error("external endpoint advertised no projection")]
     NoProjection,
     #[error("external projection index {0} was not advertised")]
